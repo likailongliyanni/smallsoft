@@ -1,0 +1,171 @@
+{
+  "version": "1.0.3",
+  "activate": true,
+  "changelog": "多级菜单可变层级 + 菜单容器范围搜索 + select_pre_wait 800ms + EXP-022",
+  "rules": {
+    "version": "1.0.3",
+    "updated_at": "2026-05-26",
+    "description": "好办法自动化软件的浏览器识别规则",
+    "inject_js_override": "function __hbf_init() {\n    if (window.__hbf_injected) return;\n    if (!document.body) { setTimeout(__hbf_init, 30); return; }\n    window.__hbf_injected = true;\n\n    // 知识库（由 Python 注入 window.__hbf_rules）\n    const RULES = window.__hbf_rules || {};\n    console.log(\"[好办法] 录制脚本已注入，规则版本:\", RULES.version || \"默认\");\n\n    const MAX_STEPS = 50;\n    let stepCount = 0;\n    let paused = false;\n\n    // 浏览器层面的双发事件保护（不是用户的\"双击\"，那个要保留）\n    let lastClickTime = 0;\n\n    // 输入框包装层 class（白名单匹配，不会误伤 -node/-menu/-item）\n    // 注意：这个列表不再用于\"跳过 click\"，只供未来的可视化提示用\n    const WRAPPER_CLASSES = new Set(RULES.input_wrapper_classes || []);\n    // 下拉触发器 class（点击会展开下拉菜单，必须记录这一步）\n    const TRIGGER_CLASSES = new Set(RULES.trigger_wrapper_classes || []);\n    // 下拉菜单选项 class\n    const OPTION_CLASSES = new Set(RULES.option_classes || []);\n\n    /* ───── 样式 ───── */\n    const style = document.createElement(\"style\");\n    style.textContent = `\n        #hbf-toolbar{position:fixed;top:12px;right:12px;z-index:2147483646;background:#1a1a1a;color:#fff;border-radius:12px;padding:10px 18px;font-family:\"Microsoft YaHei\",sans-serif;font-size:13px;display:flex;align-items:center;gap:14px;box-shadow:0 4px 20px rgba(0,0,0,0.3);user-select:none}\n        #hbf-toolbar .dot{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:hbf-blink 1s infinite}\n        #hbf-toolbar.paused .dot{background:#94a3b8;animation:none}\n        @keyframes hbf-blink{50%{opacity:0.3}}\n        #hbf-toolbar .ct{background:#16a34a;padding:3px 12px;border-radius:10px;font-weight:700;font-size:12px}\n        #hbf-toolbar .ct.warn{background:#f97316}\n        #hbf-toolbar .ct.over{background:#dc2626}\n        #hbf-toolbar button{border:none;padding:6px 12px;border-radius:7px;cursor:pointer;font:inherit;font-size:12px;font-weight:600}\n        #hbf-toolbar .pause{background:#374151;color:#fff}\n        #hbf-toolbar .pause:hover{background:#4b5563}\n        #hbf-toolbar .done{background:#16a34a;color:#fff}\n        #hbf-toolbar .done:hover{background:#15803d}\n        #hbf-banner{position:fixed;top:0;left:0;right:0;z-index:2147483645;background:#fef3c7;color:#78350f;font-family:\"Microsoft YaHei\",sans-serif;font-size:13px;padding:8px 16px;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 4px rgba(0,0,0,0.08)}\n        #hbf-banner.warn{background:#fee2e2;color:#7f1d1d}\n        #hbf-banner .close{background:transparent;border:none;cursor:pointer;font-size:18px;color:inherit;padding:0 6px}\n        #hbf-flash{position:fixed;z-index:2147483644;pointer-events:none;border:2px solid #16a34a;border-radius:4px;box-shadow:0 0 0 4px rgba(22,163,74,0.2);transition:opacity 0.4s;background:rgba(22,163,74,0.08)}\n        #hbf-toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#f97316;color:#fff;padding:10px 22px;border-radius:9px;font-family:\"Microsoft YaHei\";font-size:14px;font-weight:600;box-shadow:0 8px 24px rgba(249,115,22,0.4);animation:hbf-slide 0.25s}\n        @keyframes hbf-slide{from{opacity:0;transform:translate(-50%,20px)}to{opacity:1;transform:translate(-50%,0)}}\n    `;\n    document.head.appendChild(style);\n\n    /* ───── 顶部提示条 ───── */\n    const banner = document.createElement(\"div\");\n    banner.id = \"hbf-banner\";\n    banner.innerHTML = `💡 录制中：每一次点击/输入都会被记录。多点的步骤可在「整理」页用「撤销」删掉。<button class=\"close\" id=\"hbf-banner-close\">×</button>`;\n    document.body.appendChild(banner);\n    document.getElementById(\"hbf-banner-close\").onclick = () => banner.style.display = \"none\";\n\n    /* ───── 工具栏 ───── */\n    const toolbar = document.createElement(\"div\");\n    toolbar.id = \"hbf-toolbar\";\n    toolbar.innerHTML = `\n        <div class=\"dot\" id=\"hbf-dot\"></div>\n        <span id=\"hbf-state\">录制中</span>\n        <span class=\"ct\" id=\"hbf-ct\">0 步</span>\n        <button class=\"pause\" id=\"hbf-undo\" title=\"删除上一步记录\">↶ 撤销</button>\n        <button class=\"pause\" id=\"hbf-pause\">⏸ 暂停</button>\n        <button class=\"done\" id=\"hbf-done\">✅ 完成</button>\n    `;\n    document.body.appendChild(toolbar);\n\n    document.getElementById(\"hbf-undo\").onclick = () => {\n        if (stepCount <= 0) return;\n        stepCount--;\n        updateCount();\n        try { window.__hbf_undo(); } catch (e) {}\n    };\n    document.getElementById(\"hbf-pause\").onclick = () => {\n        paused = !paused;\n        toolbar.classList.toggle(\"paused\", paused);\n        document.getElementById(\"hbf-state\").textContent = paused ? \"已暂停\" : \"录制中\";\n        document.getElementById(\"hbf-pause\").textContent = paused ? \"▶ 继续\" : \"⏸ 暂停\";\n    };\n    document.getElementById(\"hbf-done\").onclick = () => {\n        try { window.__hbf_done(); } catch (e) {}\n    };\n\n    function updateCount() {\n        const c = document.getElementById(\"hbf-ct\");\n        c.textContent = stepCount + \" 步\";\n        c.classList.remove(\"warn\", \"over\");\n        if (stepCount > MAX_STEPS) {\n            c.classList.add(\"over\");\n            showOverWarn();\n        } else if (stepCount >= MAX_STEPS - 10) {\n            c.classList.add(\"warn\");\n        }\n    }\n\n    function showOverWarn() {\n        if (banner.classList.contains(\"warn\")) return;\n        banner.classList.add(\"warn\");\n        banner.innerHTML = `⚠️ 已超过 50 步上限，整理时需要取消多余步骤。<button class=\"close\" id=\"hbf-banner-close\">×</button>`;\n        document.getElementById(\"hbf-banner-close\").onclick = () => banner.style.display = \"none\";\n    }\n\n    function showToast(msg, color = \"#f97316\") {\n        const old = document.getElementById(\"hbf-toast\");\n        if (old) old.remove();\n        const t = document.createElement(\"div\");\n        t.id = \"hbf-toast\";\n        t.textContent = msg;\n        t.style.background = color;\n        document.body.appendChild(t);\n        setTimeout(() => { try { t.remove(); } catch(e){} }, 2000);\n    }\n\n    /* ───── 选择器构造 ───── */\n    function bestSelector(el) {\n        const tag = el.tagName.toLowerCase();\n        const cfg = RULES.selector_priority || {};\n        const idBlack = cfg.id_blacklist_prefixes || [\"__\", \"el-id-\", \"n-id-\", \"ant-\"];\n        const idMax = cfg.id_max_length || 40;\n        const dataAttrs = cfg.data_attrs || [\"data-testid\", \"data-cy\", \"data-test\", \"data-id\"];\n\n        // 1. 稳定的 ID\n        if (el.id && el.id.length < idMax) {\n            const blocked = idBlack.some(p => el.id.startsWith(p));\n            if (!blocked) return \"#\" + el.id.replace(/\"/g, '\\\\\"');\n        }\n\n        // 2. data-* 属性\n        for (const attr of dataAttrs) {\n            const v = el.getAttribute(attr);\n            if (v) return `[${attr}=\"${v}\"]`;\n        }\n\n        // 3. name 属性\n        const name = el.getAttribute(\"name\");\n        if (name) return `${tag}[name=\"${name}\"]`;\n\n        // 4. 按钮/链接：优先用可见文本（最稳健）\n        const useText = cfg.button_use_text !== false;\n        const textMax = cfg.button_text_max_length || 30;\n        const isButton = tag === \"button\" || tag === \"a\"\n            || el.getAttribute(\"role\") === \"button\"\n            || (el.className && /\\b(btn|button)\\b/i.test(el.className));\n        if (useText && isButton) {\n            const text = (el.innerText || el.textContent || \"\").trim().replace(/\\s+/g, \" \");\n            if (text && text.length > 0 && text.length < textMax) {\n                return `${tag}:has-text(\"${text.replace(/\"/g, '\\\\\"')}\")`;\n            }\n        }\n\n        // 5. 下拉选项 / 菜单项：用文本（这些通常没有稳定 ID）\n        if (el.className && typeof el.className === \"string\") {\n            const classList = el.className.trim().split(/\\s+/);\n            const isOption = classList.some(c => OPTION_CLASSES.has(c));\n            if (isOption) {\n                const text = (el.innerText || el.textContent || \"\").trim();\n                if (text && text.length > 0 && text.length < 40) {\n                    return `text=\"${text.replace(/\"/g, '\\\\\"')}\"`;\n                }\n            }\n        }\n\n        // 6. input 的 placeholder/type\n        if (tag === \"input\" || tag === \"textarea\") {\n            const ph = el.getAttribute(\"placeholder\");\n            if (ph) return `${tag}[placeholder=\"${ph}\"]`;\n            const tp = el.getAttribute(\"type\");\n            if (tp) return `${tag}[type=\"${tp}\"]`;\n        }\n\n        // 7. 业务 class（过滤掉框架通用 class）\n        const genericPrefixes = cfg.generic_class_prefixes || [\"el-\", \"ant-\", \"n-\", \"van-\"];\n        if (el.className && typeof el.className === \"string\") {\n            const classes = el.className.trim().split(/\\s+/).filter(c => {\n                if (!c || c.length <= 3) return false;\n                return !genericPrefixes.some(p => c.startsWith(p));\n            });\n            if (classes.length > 0) {\n                let sel = tag + \".\" + classes[0];\n                const text = (el.innerText || el.textContent || \"\").trim();\n                if (text && text.length > 0 && text.length < 20) {\n                    sel += `:has-text(\"${text.replace(/\"/g, '\\\\\"')}\")`;\n                }\n                return sel;\n            }\n        }\n\n        // 8. 文本兜底\n        const text = (el.innerText || el.textContent || \"\").trim().substring(0, 20);\n        if (text) return `text=\"${text.replace(/\"/g, '\\\\\"')}\"`;\n\n        return tag;\n    }\n\n    /* ───── label 提取 ───── */\n    function elementLabel(el) {\n        const cfg = RULES.label_extraction || {};\n\n        if (cfg.aria_label !== false) {\n            const al = el.getAttribute(\"aria-label\");\n            if (al) return cleanLabel(al);\n        }\n        if (cfg.for_attribute !== false && el.id) {\n            const lbl = document.querySelector(`label[for=\"${el.id}\"]`);\n            if (lbl) return cleanLabel(lbl.innerText);\n        }\n        // 父级 label\n        if (cfg.parent_label !== false) {\n            let p = el.parentElement;\n            for (let i = 0; i < 6 && p; i++) {\n                if (p.tagName === \"LABEL\") return cleanLabel(p.innerText);\n                const cls = p.className && typeof p.className === \"string\" ? p.className : \"\";\n                const isFormItem = (cfg.form_item_containers || []).some(k =>\n                    new RegExp(\"\\\\b\" + k.replace(/[-_]/g, \"[-_]\") + \"\\\\b\").test(cls)\n                );\n                if (isFormItem) {\n                    const selectors = cfg.form_item_label_selectors || [\"label\"];\n                    for (const s of selectors) {\n                        try {\n                            const inner = p.querySelector(s);\n                            if (inner) {\n                                const t = cleanLabel(inner.innerText);\n                                if (t) return t;\n                            }\n                        } catch (e) {}\n                    }\n                }\n                p = p.parentElement;\n            }\n        }\n        // 前面的兄弟节点\n        let prev = el.previousElementSibling;\n        for (let i = 0; i < 3 && prev; i++) {\n            const tag = prev.tagName;\n            if (tag === \"LABEL\" || tag === \"SPAN\" || tag === \"DIV\") {\n                const t = cleanLabel(prev.innerText);\n                if (t && t.length < 30 && t.length > 0) return t;\n            }\n            prev = prev.previousElementSibling;\n        }\n        const ph = el.getAttribute(\"placeholder\");\n        if (ph) return cleanLabel(ph);\n        const nm = el.getAttribute(\"name\");\n        if (nm) return nm;\n        const txt = (el.innerText || el.textContent || \"\").trim();\n        if (txt) return txt.substring(0, 16);\n        return \"\";\n    }\n\n    function cleanLabel(s) {\n        if (!s) return \"\";\n        let v = s.trim();\n        const prefixes = (RULES.label_extraction && RULES.label_extraction.placeholder_strip_prefix) ||\n            [\"请输入\", \"请选择\", \"请填写\"];\n        for (const p of prefixes) {\n            if (v.startsWith(p)) {\n                v = v.substring(p.length).trim();\n                break;\n            }\n        }\n        return v.replace(/[:：*\\s]+$/, \"\").trim().substring(0, 24);\n    }\n\n    function elementText(el) {\n        return (el.innerText || el.textContent || \"\").trim().substring(0, 40);\n    }\n\n    /* ───── 把点击目标\"提升\"到真正的可点击祖先 ─────\n       关键修复：用户点 <span>新 增</span> 时，自动提升到外层 <button>，\n       这样 selector 是 button:has-text(\"新 增\") 而不是 text=\"新 增\"，\n       触发下拉菜单/对话框更可靠。 */\n    function findClickableTarget(el) {\n        if (!el || el === document.body) return el;\n        let n = el;\n        for (let i = 0; i < 6 && n && n !== document.body; i++) {\n            const tag = n.tagName ? n.tagName.toLowerCase() : \"\";\n            if (tag === \"button\" || tag === \"a\") return n;\n            const role = n.getAttribute ? n.getAttribute(\"role\") : \"\";\n            if (role === \"button\" || role === \"link\" || role === \"menuitem\"\n                || role === \"option\" || role === \"tab\") return n;\n            const cls = (n.className && typeof n.className === \"string\") ? n.className : \"\";\n            // 已知可点击容器（含菜单项）\n            if (/(^|\\s)(el-button|el-dropdown-item|el-dropdown-menu__item|el-menu-item|el-option|el-cascader-node|el-select-dropdown__item|el-tabs__item|el-radio|el-checkbox|ant-btn|ant-dropdown-item|ant-select-item-option|ant-cascader-menu-item|ant-menu-item|ant-radio|ant-checkbox|n-button|n-base-select-option|n-cascader-option|n-menu-item|van-button|van-cell--clickable|btn|button)(\\s|$)/i.test(cls)) {\n                return n;\n            }\n            n = n.parentElement;\n        }\n        return el;\n    }\n\n    /* ───── XPath（兜底定位）───── */\n    function getXPath(el) {\n        if (!el || el.nodeType !== 1) return \"\";\n        if (el.id && !/^(__|el-id-|n-id-|ant-)/.test(el.id) && el.id.length < 40) {\n            return `//*[@id=\"${el.id}\"]`;\n        }\n        if (el === document.documentElement) return \"/html\";\n        if (el === document.body) return \"/html/body\";\n        const parts = [];\n        let n = el;\n        while (n && n.nodeType === 1 && n !== document.body && n !== document.documentElement) {\n            let idx = 1;\n            let sib = n.previousElementSibling;\n            while (sib) {\n                if (sib.tagName === n.tagName) idx++;\n                sib = sib.previousElementSibling;\n            }\n            const tag = n.tagName.toLowerCase();\n            parts.unshift(tag + (idx > 1 ? `[${idx}]` : \"\"));\n            n = n.parentElement;\n        }\n        return \"/html/body/\" + parts.join(\"/\");\n    }\n\n    /* ───── 带 form-item 范围的选择器 ─────\n       用 label 文本锚定，对任何元素（input/div/button）都有效\n       这是修复\"下拉框用 text=当前显示值\"的核心 */\n    function scopedSelector(el) {\n        // 找最近的 form-item 容器（最多向上 8 层）\n        let fi = null;\n        let cur = el.parentElement;\n        for (let i = 0; i < 8 && cur; i++) {\n            const cls = cur.className && typeof cur.className === \"string\" ? cur.className : \"\";\n            if (/(\\b|^)(el-form-item|ant-form-item|n-form-item|avue-form-item|form-item|form_item|form-group)(\\b|$)/i.test(cls)) {\n                fi = cur;\n                break;\n            }\n            cur = cur.parentElement;\n        }\n        if (!fi) return null;\n\n        // 在 form-item 里找 label 文本（优先 <label>，回退到带 label class 的元素）\n        const labels = fi.querySelectorAll(\"label, [class*='label']:not([class*='content']):not([class*='wrap'])\");\n        let labelText = \"\";\n        for (const l of labels) {\n            const t = (l.innerText || l.textContent || \"\").trim()\n                .replace(/[:：*]/g, \"\").trim();\n            if (t && t.length < 30) { labelText = t; break; }\n        }\n        if (!labelText) return null;\n\n        // 找出 form-item 容器的标识 class\n        const fiClass = (fi.className || \"\").split(/\\s+/).find(c =>\n            /^(el-form-item|ant-form-item|n-form-item|avue-form-item|form-item|form-group)$/.test(c)\n        ) || \"form-item\";\n\n        const tag = el.tagName.toLowerCase();\n        const elCls = (el.className && typeof el.className === \"string\") ? el.className : \"\";\n\n        // 元素自身的结构化标识（优先用框架类，不要用当前文本）\n        // 这是关键：避免 text=\"集采不含运\" 这种动态值\n        let inner = tag;\n\n        // 找一个稳定的结构化 class（el-select, avue-select, ant-select 等）\n        const stableClassRegex = /^(el-|ant-|n-|van-|avue-)[a-z-]+/i;\n        const elClasses = elCls.trim().split(/\\s+/).filter(c => stableClassRegex.test(c));\n        if (elClasses.length > 0) {\n            // 用第一个结构化 class（最有可能是组件根类）\n            inner = \".\" + elClasses[0];\n        } else if (tag === \"button\" || tag === \"a\") {\n            // 按钮：仍然用文本（按钮文字一般是固定的）\n            const text = (el.innerText || el.textContent || \"\").trim().replace(/\\s+/g, \" \");\n            if (text && text.length < 30) {\n                inner = `${tag}:has-text(\"${text.replace(/\"/g, '\\\\\"')}\")`;\n            }\n        } else if (tag === \"input\" || tag === \"textarea\") {\n            inner = tag;\n        }\n\n        return `.${fiClass}:has-text(\"${labelText.replace(/\"/g, '\\\\\"')}\") ${inner}`;\n    }\n\n    /* ───── 容器类型判断 ───── */\n    // 是否是\"下拉触发器\"（el-select / el-cascader / el-date-picker 等）\n    // 这种容器的 click 必须记录（用户在打开下拉菜单）\n    function isTriggerWrapper(el) {\n        let n = el;\n        for (let i = 0; i < 5 && n; i++) {\n            const cls = (n.className && typeof n.className === \"string\") ? n.className.trim() : \"\";\n            if (cls) {\n                const parts = cls.split(/\\s+/);\n                for (const c of parts) {\n                    if (TRIGGER_CLASSES.has(c)) return n;  // 返回触发器节点\n                }\n            }\n            n = n.parentElement;\n        }\n        return null;\n    }\n\n    // 是否是\"纯文本输入框\"容器（el-input 等）\n    // 这种容器的 click 跳过（用户只是聚焦，blur 时再用 fill 记录）\n    function isInputWrapper(el) {\n        let n = el;\n        for (let i = 0; i < 5 && n; i++) {\n            const tag = n.tagName ? n.tagName.toLowerCase() : \"\";\n            // input/textarea：readonly 的算触发器（select 显示框），不跳过\n            if (tag === \"input\" || tag === \"textarea\") {\n                if (n.readOnly || n.hasAttribute(\"readonly\")) {\n                    return false;  // readonly = 下拉显示框，不跳过\n                }\n                return true;\n            }\n            const cls = (n.className && typeof n.className === \"string\") ? n.className.trim() : \"\";\n            if (cls) {\n                const parts = cls.split(/\\s+/);\n                for (const c of parts) {\n                    if (WRAPPER_CLASSES.has(c)) return true;\n                }\n            }\n            n = n.parentElement;\n        }\n        return false;\n    }\n\n    /* ───── 元素是否是下拉选项（应该被记录的）───── */\n    function isOptionElement(el) {\n        let n = el;\n        for (let i = 0; i < 4 && n; i++) {\n            const cls = (n.className && typeof n.className === \"string\") ? n.className.trim() : \"\";\n            if (cls) {\n                const parts = cls.split(/\\s+/);\n                for (const c of parts) {\n                    if (OPTION_CLASSES.has(c)) return true;\n                }\n            }\n            n = n.parentElement;\n        }\n        return false;\n    }\n\n    function e_isHbfElement(el) {\n        if (!el) return false;\n        return !!(el.closest && (el.closest(\"#hbf-toolbar\") || el.closest(\"#hbf-banner\") || el.closest(\"#hbf-flash\") || el.closest(\"#hbf-toast\")));\n    }\n\n    function flash(el) {\n        try {\n            const r = el.getBoundingClientRect();\n            const f = document.createElement(\"div\");\n            f.id = \"hbf-flash\";\n            f.style.left = r.left + \"px\";\n            f.style.top = r.top + \"px\";\n            f.style.width = r.width + \"px\";\n            f.style.height = r.height + \"px\";\n            document.body.appendChild(f);\n            setTimeout(() => f.style.opacity = \"0\", 100);\n            setTimeout(() => f.remove(), 500);\n        } catch (e) {}\n    }\n\n    function record(step) {\n        if (paused) return;\n        stepCount++;\n        step.step_index = stepCount;\n        step.url = location.href;\n        // 兜底定位\n        try {\n            if (step._el) {\n                step.xpath = getXPath(step._el);\n                // 优先用 click handler 已经算好的 scoped_hint，避免重复计算\n                let scoped = step._scoped_hint;\n                if (!scoped) {\n                    try { scoped = scopedSelector(step._el); } catch (e) {}\n                }\n                if (scoped) step.scoped_selector = scoped;\n            }\n        } catch (e) {}\n        delete step._el;\n        delete step._scoped_hint;\n        updateCount();\n        try { window.__hbf_record(JSON.stringify(step)); }\n        catch (e) { console.error(\"[好办法] 上报失败:\", e); }\n    }\n\n    /* ───── 点击监听 ─────\n       核心原则：用户每点一下都要记录，绝不省略，绝不去重。\n       去重的责任在用户的\"撤销\"按钮，不在我们这里偷做主。\n       下拉/多级菜单/搜索框/隐藏选项都是多步操作，漏掉任何一步都会让脚本跑不通。 */\n    document.addEventListener(\"click\", function (e) {\n        if (e_isHbfElement(e.target)) return;\n        if (paused) return;\n\n        // 浏览器层面的双发事件保护（< 50ms 同一目标视为一次）\n        // 注意：这只挡浏览器抽风，挡不住用户连点 —— 用户的连点都必须记录\n        const tNow = Date.now();\n        if (tNow - lastClickTime < 50 && e.target === window.__hbf_lastTarget) {\n            return;\n        }\n        lastClickTime = tNow;\n        window.__hbf_lastTarget = e.target;\n\n        // 提升到可点击祖先（span → button）\n        const el = findClickableTarget(e.target);\n        const tag = el.tagName.toLowerCase();\n        const type = (el.getAttribute(\"type\") || \"\").toLowerCase();\n\n        // ───── 1. checkbox / radio ─────\n        if (tag === \"input\" && (type === \"checkbox\" || type === \"radio\")) {\n            setTimeout(() => {\n                record({\n                    action_type: type === \"checkbox\" ? \"check\" : \"click\",\n                    action_label: type === \"checkbox\" ? \"勾选\" : \"选择\",\n                    selector: bestSelector(el),\n                    label: elementLabel(el),\n                    value: el.checked,\n                    tag: tag,\n                    _el: el,\n                });\n                flash(el);\n            }, 0);\n            return;\n        }\n\n        // ───── 2. 识别：选项 / 触发器 ─────\n        const isOption = isOptionElement(el);\n        const triggerNode = isOption ? null : isTriggerWrapper(el);\n\n        // ───── 3. 决定记录目标 ─────\n        const target = triggerNode || el;\n        const targetTag = target.tagName.toLowerCase();\n\n        // ───── 4. 原生输入框的 click 跳过（focus 触发，用 blur 抓最终文本）─────\n        // 但 readonly input 是下拉框的\"显示部分\"，必须记录（点开下拉）\n        if ((targetTag === \"input\" || targetTag === \"textarea\") && !isOption && !triggerNode) {\n            if (!(target.readOnly || target.hasAttribute(\"readonly\"))) {\n                return;\n            }\n        }\n        if (targetTag === \"select\") return;  // 原生 select 由 change 监听器处理\n\n        // ───── 5. 生成选择器 ─────\n        // 关键修复：用 scoped_selector（form-item label 锚定）当主选择器\n        // 这样不管下拉框现在显示什么文字，定位都稳的\n        let sel = bestSelector(target);\n        let scoped = null;\n        try { scoped = scopedSelector(target); } catch (err) {}\n\n        // 不稳定 selector 的判定：text=... 或 :has-text(当前显示值)\n        const unstableTextSel =\n            /^text=/.test(sel) ||\n            (triggerNode && sel.indexOf(':has-text(') >= 0);\n        if (scoped && unstableTextSel) {\n            sel = scoped;  // 用 scoped 顶上来当主\n        }\n\n        // ───── 6. action 类型 ─────\n        let actionType, actionLabel;\n        if (isOption) {\n            actionType = \"select_option\";\n            actionLabel = \"选择菜单项\";\n        } else if (triggerNode) {\n            actionType = \"click\";\n            actionLabel = \"打开下拉\";\n        } else {\n            actionType = \"click\";\n            actionLabel = \"点击\";\n        }\n\n        // ───── 7. 上报 ─────\n        record({\n            action_type: actionType,\n            action_label: actionLabel,\n            selector: sel,\n            label: elementLabel(target),\n            text: elementText(target).substring(0, 30),\n            tag: targetTag,\n            is_trigger: !!triggerNode,\n            is_option: isOption,\n            _el: target,\n            _scoped_hint: scoped && scoped !== sel ? scoped : null,\n        });\n        flash(target);\n    }, true);\n\n    /* ───── 输入框失焦记录 ───── */\n    const inputTracker = new WeakMap();\n    document.addEventListener(\"focus\", function (e) {\n        const el = e.target;\n        if (!el || !el.tagName) return;\n        const tag = el.tagName.toLowerCase();\n        if (tag === \"input\" || tag === \"textarea\" || el.isContentEditable) {\n            const type = (el.getAttribute(\"type\") || \"\").toLowerCase();\n            if (type === \"checkbox\" || type === \"radio\") return;\n            inputTracker.set(el, el.value || el.innerText || \"\");\n        }\n    }, true);\n\n    document.addEventListener(\"blur\", function (e) {\n        const el = e.target;\n        if (!el || !el.tagName) return;\n        if (e_isHbfElement(el)) return;\n        const tag = el.tagName.toLowerCase();\n        if (tag !== \"input\" && tag !== \"textarea\" && !el.isContentEditable) return;\n        const type = (el.getAttribute(\"type\") || \"\").toLowerCase();\n        if (type === \"checkbox\" || type === \"radio\") return;\n\n        // 关键：readonly / disabled 的输入不记录（这通常是 select/cascader 的显示框）\n        const blurCfg = RULES.blur_record || {};\n        if (blurCfg.skip_readonly !== false &&\n            (el.readOnly || el.hasAttribute(\"readonly\"))) {\n            return;\n        }\n        if (blurCfg.skip_disabled !== false && el.disabled) return;\n\n        const newVal = el.value !== undefined ? el.value : (el.innerText || \"\");\n        const oldVal = inputTracker.get(el) || \"\";\n        if (newVal === oldVal) return;\n        if (!newVal && !oldVal) return;\n\n        record({\n            action_type: \"input\",\n            action_label: type === \"password\" ? \"输入密码\" : \"输入\",\n            selector: bestSelector(el),\n            label: elementLabel(el),\n            value: newVal,\n            tag: tag,\n            input_type: type || \"text\",\n            _el: el,\n        });\n        flash(el);\n    }, true);\n\n    /* ───── 原生 select 的 change ───── */\n    document.addEventListener(\"change\", function (e) {\n        const el = e.target;\n        if (!el || !el.tagName) return;\n        if (e_isHbfElement(el)) return;\n        const tag = el.tagName.toLowerCase();\n        if (tag !== \"select\") return;\n        const opt = el.options[el.selectedIndex];\n        record({\n            action_type: \"select\",\n            action_label: \"选择\",\n            selector: bestSelector(el),\n            label: elementLabel(el),\n            value: el.value,\n            text: opt ? opt.text : \"\",\n            tag: tag,\n            _el: el,\n        });\n        flash(el);\n    }, true);\n\n    updateCount();\n}\n\nif (document.readyState === \"loading\") {\n    document.addEventListener(\"DOMContentLoaded\", __hbf_init);\n    setTimeout(__hbf_init, 100);\n} else {\n    __hbf_init();\n}\n",
+    "runner_config": {
+      "default_timeout_ms": 15000,
+      "find_visible_poll_ms": 250,
+      "find_visible_max_loops": 60,
+      "select_option_pre_wait_ms": 800,
+      "select_option_wait_after_ms": 500,
+      "click_wait_after_ms": 600,
+      "fill_retry_with_type": true
+    },
+    "input_wrapper_classes": [
+      "el-input",
+      "el-textarea",
+      "el-input-number",
+      "el-autocomplete",
+      "ant-input",
+      "ant-input-affix-wrapper",
+      "ant-input-number",
+      "n-input",
+      "n-input-number",
+      "van-field",
+      "van-cell"
+    ],
+    "trigger_wrapper_classes": [
+      "el-select",
+      "el-cascader",
+      "el-date-editor",
+      "el-time-editor",
+      "el-color-picker",
+      "el-dropdown",
+      "el-dropdown-link",
+      "el-popover",
+      "el-tooltip",
+      "el-autocomplete",
+      "ant-select",
+      "ant-cascader-picker",
+      "ant-select-selector",
+      "ant-picker",
+      "ant-dropdown-trigger",
+      "ant-mention",
+      "n-base-selection",
+      "n-base-selection-input",
+      "n-dropdown",
+      "n-cascader",
+      "n-date-picker",
+      "n-time-picker",
+      "avue-select",
+      "avue-cascader",
+      "avue-date-picker",
+      "avue-time-picker",
+      "avue-input-tree",
+      "avue-input-dict",
+      "avue-input-color",
+      "avue-input-table",
+      "avue-input-icon",
+      "avue-dropdown",
+      "avue-search",
+      "van-dropdown-menu__item",
+      "van-field--clickable"
+    ],
+    "option_classes": [
+      "el-cascader-node",
+      "el-select-dropdown__item",
+      "el-option",
+      "el-dropdown-menu__item",
+      "el-menu-item",
+      "el-date-table__cell",
+      "el-time-spinner__item",
+      "ant-cascader-menu-item",
+      "ant-select-item-option",
+      "ant-picker-cell",
+      "ant-dropdown-menu-item",
+      "ant-menu-item",
+      "n-base-select-option",
+      "n-cascader-option",
+      "n-menu-item",
+      "van-picker-column__item"
+    ],
+    "duplicate_detection": {
+      "enabled": false,
+      "window_ms": 50,
+      "max_warnings": 0,
+      "_comment": "v1.0.2 起默认关闭：用户每点一下都是一步，去重的责任在「整理」页的撤销按钮"
+    },
+    "selector_priority": {
+      "button_use_text": true,
+      "button_text_max_length": 30,
+      "id_blacklist_prefixes": [
+        "__",
+        "el-id-",
+        "n-id-",
+        "ant-",
+        "react-"
+      ],
+      "id_max_length": 40,
+      "data_attrs": [
+        "data-testid",
+        "data-cy",
+        "data-test",
+        "data-id"
+      ],
+      "generic_class_prefixes": [
+        "el-",
+        "ant-",
+        "n-",
+        "van-",
+        "is-",
+        "has-",
+        "primary",
+        "default",
+        "success",
+        "warning",
+        "danger",
+        "info",
+        "disabled",
+        "active",
+        "hover",
+        "focus",
+        "small",
+        "medium",
+        "large",
+        "block",
+        "round",
+        "circle",
+        "btn",
+        "button"
+      ]
+    },
+    "blur_record": {
+      "skip_readonly": true,
+      "skip_disabled": true,
+      "min_value_length": 0
+    },
+    "label_extraction": {
+      "aria_label": true,
+      "for_attribute": true,
+      "parent_label": true,
+      "form_item_containers": [
+        "form-item",
+        "el-form-item",
+        "ant-form-item",
+        "form_item",
+        "form-group",
+        "n-form-item"
+      ],
+      "form_item_label_selectors": [
+        "label",
+        ".form-item-label",
+        ".el-form-item__label",
+        ".ant-form-item-label",
+        ".n-form-item-label",
+        "[class*='label']"
+      ],
+      "placeholder_strip_prefix": [
+        "请输入",
+        "请选择",
+        "请填写",
+        "输入",
+        "选择"
+      ]
+    }
+  }
+}

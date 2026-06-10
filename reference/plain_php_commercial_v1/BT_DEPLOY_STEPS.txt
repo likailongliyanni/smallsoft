@@ -1,0 +1,65 @@
+BaoTa deployment steps for tools.haobanfa.online
+
+1. Upload
+
+Upload web_platform_php contents to:
+/www/wwwroot/tools.haobanfa.online
+
+2. Site settings
+
+BaoTa -> Website -> tools.haobanfa.online -> Settings
+
+Set running directory / site root to:
+/www/wwwroot/tools.haobanfa.online/public
+
+Set PHP version:
+PHP 8.1+ recommended
+
+Disable reverse proxy:
+If there is a proxy to http://127.0.0.1:8088, turn it off.
+
+3. MySQL
+
+BaoTa -> Databases -> Add database
+
+database: webauto
+username: webauto
+password: choose a strong password
+
+Import SQL:
+/www/wwwroot/tools.haobanfa.online/database/schema.sql
+
+4. Edit config
+
+Edit:
+/www/wwwroot/tools.haobanfa.online/config/config.php
+
+Change:
+database
+username
+password
+admin_password
+app_url
+
+5. Check
+
+Open:
+https://tools.haobanfa.online/install_check.php
+
+All checks should be OK.
+Then delete install_check.php.
+
+6. Admin
+
+Open:
+https://tools.haobanfa.online/admin.php
+
+Use admin_password from config.php.
+
+7. No Python service needed
+
+This PHP version does not use:
+uvicorn
+nohup
+.venv
+8088
