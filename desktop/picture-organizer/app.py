@@ -1,14 +1,19 @@
 import csv
 import ctypes
+import json
+import mimetypes
 import os
 import queue
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import traceback
 import tkinter as tk
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -203,6 +208,237 @@ def convert_to_jpg(source: Path, target: Path, quality: int):
         target.parent.mkdir(parents=True, exist_ok=True)
         quality = max(30, min(100, int(quality or 95)))
         image.save(target, "JPEG", quality=quality, optimize=True)
+
+
+# ---------------- AI 去水印（阿里云百炼 DashScope） ----------------
+# 和网站后台同一套阿里云全家桶：模型 wanx2.1-imageedit 的 remove_watermark 功能。
+# 只用标准库 urllib，不增加打包体积。
+
+DASHSCOPE_BASE = "https://dashscope.aliyuncs.com"
+WATERMARK_MODEL = "wanx2.1-imageedit"
+WATERMARK_MIN_SIDE = 512
+WATERMARK_MAX_SIDE = 4096
+WATERMARK_MAX_BYTES = 10 * 1024 * 1024
+
+
+def config_path() -> Path:
+    return app_dir() / "图片整理器配置.json"
+
+
+def load_config() -> dict:
+    try:
+        data = json.loads(config_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_config(updates: dict):
+    data = load_config()
+    data.update(updates)
+    try:
+        config_path().write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as exc:
+        write_error_log(f"保存配置失败：{exc}")
+
+
+class DashScopeError(RuntimeError):
+    pass
+
+
+def friendly_dashscope_error(code: str, message: str) -> str:
+    text = f"{code} {message}".lower()
+    if "invalidapikey" in text or "invalid_api_key" in text or "incorrect api key" in text:
+        return "API Key 无效，请检查填写的 DashScope Key。"
+    if "arrearage" in text:
+        return "阿里云账户欠费，请到百炼控制台充值。"
+    if "throttling" in text or "ratelimit" in text or "rate limit" in text:
+        return "接口被限流，稍后会自动重试。"
+    if "datainspection" in text or "inappropriate" in text or "green" in text:
+        return "图片未通过内容审核，已跳过。"
+    return f"{code}：{message}"[:200]
+
+
+def _ds_request(url: str, api_key: str, payload: dict | None = None,
+                headers: dict | None = None, timeout: int = 60) -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET")
+    request.add_header("Authorization", f"Bearer {api_key}")
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        try:
+            info = json.loads(body)
+            code = info.get("code") or exc.code
+            message = info.get("message") or body[:200]
+        except Exception:
+            code, message = exc.code, body[:200]
+        if exc.code == 401:
+            raise DashScopeError("API Key 无效，请检查填写的 DashScope Key。")
+        raise DashScopeError(friendly_dashscope_error(str(code), str(message)))
+    except urllib.error.URLError as exc:
+        raise DashScopeError(f"网络请求失败：{exc.reason}")
+
+
+def _encode_multipart(fields: list, filename: str, file_bytes: bytes):
+    boundary = f"----PicOrganizer{uuid.uuid4().hex}"
+    chunks = []
+    for name, value in fields:
+        chunks.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode("utf-8")
+        )
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    chunks.append(
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode("utf-8")
+    )
+    chunks.append(file_bytes)
+    chunks.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def ds_upload_image(api_key: str, path: Path) -> str:
+    """把本地图片传到 DashScope 临时存储（48 小时自动删除），返回 oss:// 地址。"""
+    policy = _ds_request(
+        f"{DASHSCOPE_BASE}/api/v1/uploads?action=getPolicy&model={WATERMARK_MODEL}",
+        api_key,
+    )
+    data = policy.get("data") or {}
+    needed = ("upload_host", "upload_dir", "policy", "signature", "oss_access_key_id")
+    if not all(data.get(key) for key in needed):
+        raise DashScopeError("获取上传授权失败，请稍后重试。")
+
+    key = f"{data['upload_dir']}/{uuid.uuid4().hex}{path.suffix.lower() or '.jpg'}"
+    fields = [
+        ("OSSAccessKeyId", str(data["oss_access_key_id"])),
+        ("Signature", str(data["signature"])),
+        ("policy", str(data["policy"])),
+        ("key", key),
+        ("x-oss-object-acl", str(data.get("x_oss_object_acl", "private"))),
+        ("x-oss-forbid-overwrite", str(data.get("x_oss_forbid_overwrite", "true"))),
+        ("success_action_status", "200"),
+    ]
+    body, content_type = _encode_multipart(fields, path.name, path.read_bytes())
+    request = urllib.request.Request(str(data["upload_host"]), data=body, method="POST")
+    request.add_header("Content-Type", content_type)
+    try:
+        with urllib.request.urlopen(request, timeout=180):
+            pass
+    except urllib.error.HTTPError as exc:
+        raise DashScopeError(f"图片上传失败：HTTP {exc.code}")
+    except urllib.error.URLError as exc:
+        raise DashScopeError(f"图片上传失败：{exc.reason}")
+    return f"oss://{key}"
+
+
+def ds_create_watermark_task(api_key: str, oss_url: str) -> str:
+    payload = {
+        "model": WATERMARK_MODEL,
+        "input": {
+            "function": "remove_watermark",
+            "prompt": "去除图片中的水印、文字水印和角标，保持商品和画面其他内容不变",
+            "base_image_url": oss_url,
+        },
+        "parameters": {"n": 1},
+    }
+    response = _ds_request(
+        f"{DASHSCOPE_BASE}/api/v1/services/aigc/image2image/image-synthesis",
+        api_key,
+        payload,
+        headers={
+            "X-DashScope-Async": "enable",
+            "X-DashScope-OssResourceResolve": "enable",
+        },
+    )
+    task_id = (response.get("output") or {}).get("task_id")
+    if not task_id:
+        raise DashScopeError("创建去水印任务失败，请稍后重试。")
+    return str(task_id)
+
+
+def ds_wait_task(api_key: str, task_id: str, stop_event: threading.Event,
+                 timeout: float = 300.0) -> str:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if stop_event.is_set():
+            raise DashScopeError("已停止。")
+        info = _ds_request(f"{DASHSCOPE_BASE}/api/v1/tasks/{task_id}", api_key)
+        output = info.get("output") or {}
+        status = str(output.get("task_status") or "")
+        if status == "SUCCEEDED":
+            results = output.get("results") or []
+            url = results[0].get("url") if results and isinstance(results[0], dict) else None
+            if not url:
+                raise DashScopeError("任务完成但没有返回结果图。")
+            return str(url)
+        if status in {"FAILED", "CANCELED", "UNKNOWN"}:
+            raise DashScopeError(friendly_dashscope_error(
+                str(output.get("code") or status),
+                str(output.get("message") or "任务失败"),
+            ))
+        stop_event.wait(2)
+    raise DashScopeError("任务超时（5 分钟）。")
+
+
+def ds_download_bytes(url: str) -> bytes:
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=180) as response:
+            return response.read()
+    except Exception as exc:
+        raise DashScopeError(f"下载结果图失败：{exc}")
+
+
+def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
+    """送 AI 前的预处理：统一转成尺寸合规（512~4096px、≤10MB）的 JPG 临时文件。"""
+    with Image.open(path) as image:
+        image.load()
+        image = ImageOps.exif_transpose(image)
+        if image.mode in {"RGBA", "LA", "PA"} or "transparency" in image.info:
+            image = image.convert("RGBA")
+            background = Image.new("RGB", image.size, "white")
+            background.paste(image, mask=image.getchannel("A"))
+            image = background
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+
+        width, height = image.size
+        if min(width, height) <= 0:
+            raise DashScopeError("图片尺寸异常，已跳过。")
+        if max(width, height) / min(width, height) > WATERMARK_MAX_SIDE / WATERMARK_MIN_SIDE:
+            raise DashScopeError("长宽比过大（例如详情长图），AI 接口不支持，已跳过。")
+
+        scale = 1.0
+        if min(width, height) < WATERMARK_MIN_SIDE:
+            scale = WATERMARK_MIN_SIDE / min(width, height)
+        elif max(width, height) > WATERMARK_MAX_SIDE:
+            scale = WATERMARK_MAX_SIDE / max(width, height)
+        if scale != 1.0:
+            image = image.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.LANCZOS,
+            )
+
+        target = temp_dir / f"{uuid.uuid4().hex}.jpg"
+        for quality in (92, 85, 75):
+            image.save(target, "JPEG", quality=quality, optimize=True)
+            if target.stat().st_size <= WATERMARK_MAX_BYTES:
+                break
+        return target
 
 
 class DownloadMonitor:
@@ -416,6 +652,337 @@ class WorkPanel(tk.Toplevel):
         self.geometry("+18+18")
 
 
+class WatermarkWindow(tk.Toplevel):
+    """AI 批量去水印：选文件夹/图片 → 并发调用阿里云 → 存到 xxx_去水印 目录，原图不动。"""
+
+    def __init__(self, owner):
+        super().__init__(owner.root)
+        self.owner = owner
+        self.title("AI 批量去水印")
+        self.geometry("700x600")
+        self.minsize(640, 540)
+        self.transient(owner.root)
+
+        config = load_config()
+        default_key = str(config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", ""))
+        self.api_key_var = tk.StringVar(value=default_key)
+        self.show_key_var = tk.BooleanVar(value=False)
+        self.recursive_var = tk.BooleanVar(value=True)
+        self.workers_var = tk.IntVar(value=2)
+        self.source_var = tk.StringVar(value="还没有选择图片")
+        self.output_var = tk.StringVar(value="-")
+        self.progress_var = tk.StringVar(value="待开始")
+
+        self.tasks = []  # [(源文件 Path, 输出文件 Path)]
+        self.running = False
+        self.stop_event = threading.Event()
+        self.events: queue.Queue = queue.Queue()
+        self.threads = []
+        self.temp_dir = None
+        self.done = 0
+        self.failed = 0
+
+        self.build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(6, weight=1)
+        pad = {"padx": 14}
+
+        ttk.Label(
+            self,
+            text="批量去除图片水印（阿里云百炼 AI，按张计费）。请只处理你自己拥有或已获授权的图片。",
+            style="Hint.TLabel",
+            wraplength=640,
+        ).grid(row=0, column=0, sticky="w", pady=(12, 8), **pad)
+
+        key_row = ttk.Frame(self)
+        key_row.grid(row=1, column=0, sticky="ew", **pad)
+        key_row.columnconfigure(1, weight=1)
+        ttk.Label(key_row, text="API Key").grid(row=0, column=0, padx=(0, 8))
+        self.key_entry = ttk.Entry(key_row, textvariable=self.api_key_var, show="*")
+        self.key_entry.grid(row=0, column=1, sticky="ew")
+        ttk.Checkbutton(
+            key_row, text="显示", variable=self.show_key_var, command=self.toggle_key_visible
+        ).grid(row=0, column=2, padx=(8, 0))
+        ttk.Label(
+            key_row,
+            text="和网站后台同一个 DASHSCOPE_API_KEY（阿里云百炼控制台获取），保存在本机配置文件。",
+            style="Hint.TLabel",
+            wraplength=640,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        source_row = ttk.Frame(self)
+        source_row.grid(row=2, column=0, sticky="ew", pady=(12, 0), **pad)
+        self.folder_button = ttk.Button(source_row, text="选择文件夹", command=self.choose_folder)
+        self.folder_button.grid(row=0, column=0)
+        self.files_button = ttk.Button(source_row, text="选择图片", command=self.choose_files)
+        self.files_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Checkbutton(source_row, text="包含子文件夹", variable=self.recursive_var).grid(
+            row=0, column=2, padx=(12, 0)
+        )
+        ttk.Label(source_row, text="并发").grid(row=0, column=3, padx=(16, 6))
+        ttk.Spinbox(source_row, from_=1, to=3, width=4, textvariable=self.workers_var).grid(
+            row=0, column=4
+        )
+
+        ttk.Label(self, textvariable=self.source_var, style="Hint.TLabel", wraplength=640).grid(
+            row=3, column=0, sticky="w", pady=(8, 0), **pad
+        )
+        ttk.Label(self, textvariable=self.output_var, style="Hint.TLabel", wraplength=640).grid(
+            row=4, column=0, sticky="w", pady=(2, 0), **pad
+        )
+
+        action_row = ttk.Frame(self)
+        action_row.grid(row=5, column=0, sticky="ew", pady=(12, 8), **pad)
+        action_row.columnconfigure(2, weight=1)
+        self.start_button = ttk.Button(
+            action_row, text="开始去水印", style="Accent.TButton", command=self.start
+        )
+        self.start_button.grid(row=0, column=0)
+        self.stop_button = ttk.Button(action_row, text="停止", command=self.stop, state="disabled")
+        self.stop_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Label(action_row, textvariable=self.progress_var).grid(row=0, column=2, sticky="e")
+
+        bottom = ttk.Frame(self)
+        bottom.grid(row=6, column=0, sticky="nsew", pady=(0, 12), **pad)
+        bottom.columnconfigure(0, weight=1)
+        bottom.rowconfigure(1, weight=1)
+        self.progressbar = ttk.Progressbar(bottom, mode="determinate")
+        self.progressbar.grid(row=0, column=0, sticky="ew")
+        self.log_box = scrolledtext.ScrolledText(bottom, height=10, wrap="word")
+        self.log_box.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        self.log_box.configure(state="disabled")
+
+        self.log("提示：每张图大约几秒到几十秒；尺寸小于 512px 的会自动放大，超长的详情图会跳过。")
+
+    def toggle_key_visible(self):
+        self.key_entry.configure(show="" if self.show_key_var.get() else "*")
+
+    def log(self, message: str):
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", f"[{timestamp}] {message}\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    # ---------- 任务收集 ----------
+
+    def choose_folder(self):
+        folder = filedialog.askdirectory(parent=self, title="选择要去水印的图片文件夹")
+        if not folder:
+            return
+        folder_path = Path(folder)
+        pattern = folder_path.rglob("*") if self.recursive_var.get() else folder_path.glob("*")
+        sources = []
+        for path in pattern:
+            if not path.is_file() or not is_image_candidate(path.name):
+                continue
+            parent_parts = path.relative_to(folder_path).parts[:-1]
+            if any(part == "去水印" or part.endswith("_去水印") for part in parent_parts):
+                continue
+            sources.append(path)
+        sources.sort()
+        if not sources:
+            messagebox.showinfo(APP_NAME, "这个文件夹里没有找到图片。", parent=self)
+            return
+        output_root = folder_path.parent / f"{folder_path.name}_去水印"
+        self.set_tasks(
+            [(path, output_root / path.relative_to(folder_path).with_suffix(".jpg")) for path in sources],
+            f"已选择文件夹：{folder_path}（{len(sources)} 张图片）",
+            f"输出到：{output_root}（保持原目录结构，原图不动）",
+        )
+
+    def choose_files(self):
+        names = filedialog.askopenfilenames(
+            parent=self,
+            title="选择要去水印的图片",
+            filetypes=[("图片", "*.jpg *.jpeg *.png *.webp *.gif *.bmp *.avif"), ("所有文件", "*.*")],
+        )
+        if not names:
+            return
+        sources = [Path(name) for name in names if is_image_candidate(Path(name).name)]
+        if not sources:
+            messagebox.showinfo(APP_NAME, "没有选择到支持的图片格式。", parent=self)
+            return
+        self.set_tasks(
+            [(path, path.parent / "去水印" / f"{path.stem}.jpg") for path in sources],
+            f"已选择 {len(sources)} 张图片",
+            "输出到：各图片所在目录的「去水印」子文件夹（原图不动）",
+        )
+
+    def set_tasks(self, tasks, source_text: str, output_text: str):
+        used = set()
+        unique_tasks = []
+        for source, target in tasks:
+            candidate = target
+            counter = 2
+            while str(candidate).lower() in used:
+                candidate = target.with_name(f"{target.stem}-{counter}{target.suffix}")
+                counter += 1
+            used.add(str(candidate).lower())
+            unique_tasks.append((source, candidate))
+        self.tasks = unique_tasks
+        self.source_var.set(source_text)
+        self.output_var.set(output_text)
+        self.progress_var.set(f"0/{len(self.tasks)}")
+        self.progressbar.configure(maximum=max(1, len(self.tasks)), value=0)
+
+    # ---------- 执行 ----------
+
+    def start(self):
+        if self.running:
+            return
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning(APP_NAME, "请先填写 DashScope API Key。", parent=self)
+            return
+        if not self.tasks:
+            messagebox.showwarning(APP_NAME, "请先选择要处理的文件夹或图片。", parent=self)
+            return
+
+        save_config({"dashscope_api_key": api_key})
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="pic_wm_"))
+        self.stop_event = threading.Event()
+        self.events = queue.Queue()
+        self.done = 0
+        self.failed = 0
+        self.progressbar.configure(maximum=len(self.tasks), value=0)
+
+        task_queue = queue.Queue()
+        for task in self.tasks:
+            task_queue.put(task)
+        workers = max(1, min(3, int(self.workers_var.get() or 2)))
+        self.threads = []
+        for index in range(workers):
+            thread = threading.Thread(
+                target=self.worker, args=(api_key, task_queue),
+                name=f"Watermark-{index + 1}", daemon=True,
+            )
+            thread.start()
+            self.threads.append(thread)
+
+        self.running = True
+        self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.folder_button.configure(state="disabled")
+        self.files_button.configure(state="disabled")
+        self.log(f"开始处理 {len(self.tasks)} 张图片，{workers} 个并发。")
+        self.after(300, self.poll_events)
+
+    def stop(self):
+        if self.running:
+            self.stop_event.set()
+            self.log("正在停止，等待进行中的任务结束...")
+
+    def worker(self, api_key: str, task_queue: queue.Queue):
+        while not self.stop_event.is_set():
+            try:
+                source, target = task_queue.get_nowait()
+            except queue.Empty:
+                return
+            last_error = None
+            for attempt in (1, 2):
+                if self.stop_event.is_set():
+                    last_error = "已停止。"
+                    break
+                try:
+                    self.process_one(api_key, source, target)
+                    last_error = None
+                    break
+                except DashScopeError as exc:
+                    last_error = str(exc)
+                    fatal = ("API Key" in last_error or "欠费" in last_error
+                             or "已跳过" in last_error or "已停止" in last_error)
+                    if fatal or attempt == 2:
+                        break
+                    self.stop_event.wait(2)
+                except Exception as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    if attempt == 2:
+                        break
+                    self.stop_event.wait(2)
+            if last_error is None:
+                self.events.put(("ok", source, str(target)))
+            else:
+                self.events.put(("fail", source, last_error))
+
+    def process_one(self, api_key: str, source: Path, target: Path):
+        prepared = prepare_watermark_input(source, self.temp_dir)
+        try:
+            oss_url = ds_upload_image(api_key, prepared)
+            task_id = ds_create_watermark_task(api_key, oss_url)
+            result_url = ds_wait_task(api_key, task_id, self.stop_event)
+            data = ds_download_bytes(result_url)
+        finally:
+            try:
+                prepared.unlink()
+            except OSError:
+                pass
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_out = self.temp_dir / f"{uuid.uuid4().hex}.result"
+        temp_out.write_bytes(data)
+        try:
+            convert_to_jpg(temp_out, target, 95)
+        finally:
+            try:
+                temp_out.unlink()
+            except OSError:
+                pass
+
+    def poll_events(self):
+        try:
+            while True:
+                kind, source, info = self.events.get_nowait()
+                if kind == "ok":
+                    self.done += 1
+                    self.log(f"完成：{source.name}")
+                else:
+                    self.failed += 1
+                    self.log(f"失败：{source.name} —— {info}")
+                    if "API Key" in info or "欠费" in info:
+                        self.stop_event.set()
+                self.progressbar.configure(value=self.done + self.failed)
+                self.progress_var.set(
+                    f"{self.done + self.failed}/{len(self.tasks)} · 成功 {self.done} · 失败 {self.failed}"
+                )
+        except queue.Empty:
+            pass
+        if not self.running:
+            return
+        if any(thread.is_alive() for thread in self.threads):
+            self.after(300, self.poll_events)
+        else:
+            self.finish()
+
+    def finish(self):
+        self.running = False
+        self.start_button.configure(state="normal")
+        self.stop_button.configure(state="disabled")
+        self.folder_button.configure(state="normal")
+        self.files_button.configure(state="normal")
+        if self.temp_dir:
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+            self.temp_dir = None
+        stopped = self.stop_event.is_set() and (self.done + self.failed) < len(self.tasks)
+        summary = f"处理结束：成功 {self.done} 张，失败 {self.failed} 张"
+        if stopped:
+            summary += "（已手动停止，未处理完）"
+        self.log(summary)
+
+    def on_close(self):
+        if self.running:
+            if not messagebox.askyesno(APP_NAME, "正在去水印，确定停止并关闭吗？", parent=self):
+                return
+            self.stop_event.set()
+            self.running = False
+            if self.temp_dir:
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.destroy()
+
+
 class PictureOrganizerApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -427,6 +994,7 @@ class PictureOrganizerApp:
         self.current_index = 0
         self.work_mode = False
         self.work_panel: WorkPanel | None = None
+        self.watermark_window: WatermarkWindow | None = None
         self.monitor = DownloadMonitor()
         self.undo_stack: list[dict] = []
         self.polling_results = False
@@ -595,6 +1163,9 @@ class PictureOrganizerApp:
         )
         ttk.Button(toolbar, text="复制上一个", command=self.copy_previous_to_current).grid(
             row=0, column=6, padx=(8, 0)
+        )
+        ttk.Button(toolbar, text="AI 去水印", command=self.open_watermark_window).grid(
+            row=0, column=7, padx=(8, 0)
         )
 
         columns = ("index", "name", "link", "main", "detail", "status")
@@ -978,6 +1549,14 @@ class PictureOrganizerApp:
         return copied_count, category_counts
 
     # ---- 工作模式 ----
+
+    def open_watermark_window(self):
+        if self.watermark_window is not None and self.watermark_window.winfo_exists():
+            self.watermark_window.deiconify()
+            self.watermark_window.lift()
+            self.watermark_window.focus_force()
+            return
+        self.watermark_window = WatermarkWindow(self)
 
     def hotkey_pressed(self):
         if self.work_mode:
