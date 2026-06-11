@@ -31,9 +31,16 @@ HOTKEY_ID = 90521
 SHOT_HOTKEY_ID = 90522
 VK_F9 = 0x78
 VK_F8 = 0x77
+VK_CONTROL = 0x11
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
 GWLP_WNDPROC = -4
+
+# 全局低级鼠标钩子，用于「按住 Ctrl 拖动鼠标框选」手势
+WH_MOUSE_LL = 14
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
 
 WATERMARK_PRICE = 0.10  # 每张去水印的提示价格（元）
 
@@ -1096,6 +1103,130 @@ class WatermarkWindow(tk.Toplevel):
         self.destroy()
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("pt", _POINT),
+        ("mouseData", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("time", ctypes.c_uint32),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
+
+
+class CtrlDragHook:
+    """全局低级鼠标钩子：检测「按住 Ctrl + 左键拖动」手势。
+
+    回调里只把事件塞进队列并对按下/松开吞掉事件（避免误触发网页点击），
+    具体画选框、截图由主线程轮询队列完成。enabled=False 时完全不拦截。
+    """
+
+    def __init__(self):
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.hook = None
+        self.enabled = True
+        self.capturing = False
+        self.events: queue.Queue = queue.Queue()
+
+        self.HOOKPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p
+        )
+        self._proc = self.HOOKPROC(self._callback)
+
+        self.user32.SetWindowsHookExW.restype = ctypes.c_void_p
+        self.user32.SetWindowsHookExW.argtypes = [
+            ctypes.c_int, self.HOOKPROC, ctypes.c_void_p, ctypes.c_uint
+        ]
+        self.user32.CallNextHookEx.restype = ctypes.c_ssize_t
+        self.user32.CallNextHookEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p
+        ]
+        self.user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+        self.user32.UnhookWindowsHookEx.restype = ctypes.c_bool
+        self.user32.GetAsyncKeyState.restype = ctypes.c_short
+        self.user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        self.kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+        self.kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+
+    def install(self) -> bool:
+        hmod = self.kernel32.GetModuleHandleW(None)
+        self.hook = self.user32.SetWindowsHookExW(WH_MOUSE_LL, self._proc, hmod, 0)
+        return bool(self.hook)
+
+    def uninstall(self):
+        if self.hook:
+            self.user32.UnhookWindowsHookEx(self.hook)
+            self.hook = None
+        self.capturing = False
+
+    def _ctrl_down(self) -> bool:
+        return bool(self.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+
+    def _callback(self, n_code, w_param, l_param):
+        if n_code >= 0 and self.enabled:
+            try:
+                msg = int(w_param)
+                info = ctypes.cast(l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)).contents
+                x, y = int(info.pt.x), int(info.pt.y)
+                if msg == WM_LBUTTONDOWN:
+                    if self._ctrl_down():
+                        self.capturing = True
+                        self.events.put(("start", x, y))
+                        return 1  # 吞掉，避免网页收到这次点击
+                elif msg == WM_MOUSEMOVE:
+                    if self.capturing:
+                        self.events.put(("move", x, y))
+                elif msg == WM_LBUTTONUP:
+                    if self.capturing:
+                        self.capturing = False
+                        self.events.put(("finish", x, y))
+                        return 1
+            except Exception:
+                pass
+        return self.user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+
+class SelectionBoxWindow(tk.Toplevel):
+    """Ctrl 拖动时的全屏选框反馈窗口，坐标用屏幕坐标。"""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.attributes("-alpha", 0.22)
+        self.configure(bg="#0b0f14", cursor="crosshair")
+        width = self.winfo_screenwidth()
+        height = self.winfo_screenheight()
+        self.geometry(f"{width}x{height}+0+0")
+        self.canvas = tk.Canvas(self, bg="#0b0f14", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.rect = None
+        self.start = (0, 0)
+        self.visible = False
+        self.withdraw()
+
+    def begin(self, x, y):
+        self.start = (x, y)
+        self.canvas.delete("all")
+        self.rect = self.canvas.create_rectangle(x, y, x, y, outline="#22d3ee", width=2)
+        self.deiconify()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.visible = True
+
+    def update_to(self, x, y):
+        if self.rect:
+            self.canvas.coords(self.rect, self.start[0], self.start[1], x, y)
+
+    def end(self):
+        self.visible = False
+        self.withdraw()
+
+
 class ScreenshotOverlay(tk.Toplevel):
     """全屏半透明遮罩，拖动框选一块屏幕区域。松开后回调 bbox(屏幕坐标)，Esc/右键取消。"""
 
@@ -1201,8 +1332,14 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
         self.done = 0
         self.failed = 0
 
+        self.hook = CtrlDragHook()
+        self.selection_box: SelectionBoxWindow | None = None
+        self.gesture_start = None
+        self.grabbing = False
+        self.hook_polling = False
+
         self.build_ui()
-        self.register_hotkey()
+        self.install_capture()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     @property
@@ -1220,8 +1357,8 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
 
         ttk.Label(
             self,
-            text="按 F8（或点「截图」）拖框截图，自动保存；攒够后点「一键去水印」，"
-                 "AI 先挑出有水印的让你确认，确认后按 0.10 元/张批量去除。",
+            text="按住 Ctrl + 鼠标左键拖动框选屏幕区域，松开自动保存（不用切回本窗口）；"
+                 "攒够后点「一键去水印」，AI 先挑出有水印的让你确认，确认后按 0.10 元/张批量去除。",
             style="Hint.TLabel", wraplength=720,
         ).grid(row=0, column=0, sticky="w", pady=(12, 8), **pad)
 
@@ -1246,7 +1383,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
 
         bar = ttk.Frame(self)
         bar.grid(row=3, column=0, sticky="ew", pady=(10, 0), **pad)
-        self.shot_button = ttk.Button(bar, text="截图 (F8)", style="Accent.TButton", command=self.start_capture)
+        self.shot_button = ttk.Button(bar, text="手动框选", style="Accent.TButton", command=self.start_capture)
         self.shot_button.grid(row=0, column=0)
         ttk.Button(bar, text="移除选中", command=self.remove_selected).grid(row=0, column=1, padx=(8, 0))
         ttk.Button(bar, text="清空截图", command=self.clear_captures).grid(row=0, column=2, padx=(8, 0))
@@ -1292,13 +1429,52 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
         self.log_box.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         self.log_box.configure(state="disabled")
 
-    def register_hotkey(self):
+    def install_capture(self):
+        self.selection_box = SelectionBoxWindow(self.owner.root)
         try:
-            ok = self.owner.hotkey.add_hotkey(SHOT_HOTKEY_ID, VK_F8, self.start_capture)
-            if not ok:
-                self.log("F8 截图热键注册失败（可能被占用），可用「截图」按钮。")
+            if self.hook.install():
+                self.log("已开启「按住 Ctrl 拖动鼠标」截图，可直接到浏览器里框选。")
+            else:
+                self.log("Ctrl 拖动截图启用失败，可用「手动框选」按钮代替。")
         except Exception as exc:
-            self.log(f"F8 热键注册失败：{exc}")
+            self.log(f"Ctrl 拖动截图启用失败：{exc}，可用「手动框选」按钮。")
+        self.hook_polling = True
+        self.after(15, self.poll_hook)
+
+    def poll_hook(self):
+        try:
+            while True:
+                kind, x, y = self.hook.events.get_nowait()
+                if kind == "start":
+                    if self.busy or self.grabbing:
+                        continue
+                    self.gesture_start = (x, y)
+                    if self.selection_box:
+                        self.selection_box.begin(x, y)
+                elif kind == "move":
+                    if self.selection_box and self.selection_box.visible:
+                        self.selection_box.update_to(x, y)
+                elif kind == "finish":
+                    if self.gesture_start and self.selection_box:
+                        sx, sy = self.gesture_start
+                        self.gesture_start = None
+                        self.selection_box.end()
+                        self._finish_gesture(sx, sy, x, y)
+        except queue.Empty:
+            pass
+        if self.hook_polling:
+            self.after(15, self.poll_hook)
+
+    def _finish_gesture(self, sx, sy, ex, ey):
+        left, top = min(sx, ex), min(sy, ey)
+        right, bottom = max(sx, ex), max(sy, ey)
+        if right - left < 5 or bottom - top < 5:
+            self.log("框选区域太小，已忽略。")
+            return
+        self.grabbing = True
+        self.hook.enabled = False
+        self.after(120, lambda: self._grab_and_save((int(left), int(top), int(right), int(bottom)),
+                                                     restore_windows=False))
 
     def log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -1324,9 +1500,10 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
     # ---------- 截图 ----------
 
     def start_capture(self):
-        if self.busy:
+        if self.busy or self.grabbing:
             return
         save_config({"shot_output_dir": self.output_var.get()})
+        self.hook.enabled = False  # 手动框选期间不让 Ctrl 拖动钩子重复触发
         self.owner.root.withdraw()
         self.withdraw()
         self.after(150, self._show_overlay)
@@ -1343,29 +1520,38 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
             self._restore_windows()
             self.log("已取消截图。")
             return
-        self.after(150, lambda: self._grab_and_save(bbox))
+        self.after(150, lambda: self._grab_and_save(bbox, restore_windows=True))
 
-    def _grab_and_save(self, bbox):
+    def _save_capture_image(self, image):
+        self.shot_dir.mkdir(parents=True, exist_ok=True)
+        target = self._next_capture_path()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(target, "JPEG", quality=95)
+        self.captures.append({"path": target, "has": None, "note": "", "detected": False})
+        self.refresh_table()
+        self.log(f"已截图保存：{target.name}（{image.width}x{image.height}）")
+
+    def _grab_and_save(self, bbox, restore_windows: bool):
         try:
             from PIL import ImageGrab
         except Exception:
-            self._restore_windows()
             messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图（缺少 ImageGrab）。", parent=self)
+            self._after_grab(restore_windows)
             return
         try:
             image = ImageGrab.grab(bbox=bbox, all_screens=True)
-            self.shot_dir.mkdir(parents=True, exist_ok=True)
-            target = self._next_capture_path()
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            image.save(target, "JPEG", quality=95)
-            self.captures.append({"path": target, "has": None, "note": "", "detected": False})
-            self.refresh_table()
-            self.log(f"已截图保存：{target.name}（{image.width}x{image.height}）")
+            self._save_capture_image(image)
         except Exception as exc:
             self.log(f"截图失败：{exc}")
             write_error_log(f"截图失败：{exc}")
         finally:
+            self._after_grab(restore_windows)
+
+    def _after_grab(self, restore_windows: bool):
+        self.grabbing = False
+        self.hook.enabled = True
+        if restore_windows:
             self._restore_windows()
 
     def _next_capture_path(self) -> Path:
@@ -1376,6 +1562,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
                 return candidate
 
     def _restore_windows(self):
+        self.hook.enabled = True
         try:
             self.owner.root.deiconify()
         except tk.TclError:
@@ -1729,10 +1916,17 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
             self.busy = False
             if self.temp_dir:
                 shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.hook_polling = False
         try:
-            self.owner.hotkey.remove_hotkey(SHOT_HOTKEY_ID)
+            self.hook.uninstall()
         except Exception:
             pass
+        if self.selection_box is not None:
+            try:
+                self.selection_box.destroy()
+            except tk.TclError:
+                pass
+            self.selection_box = None
         self.owner.screenshot_window = None
         self.destroy()
 
