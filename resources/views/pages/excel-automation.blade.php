@@ -204,9 +204,9 @@
                     <summary>使用说明</summary>
                     <ol>
                         <li>点「选择原始表」上传一个或多个 .xlsx（支持多个 sheet），文件只在浏览器本地读取，<strong>不会上传服务器</strong>。需要固定字段和顺序时再传一个「模板表」。</li>
-                        <li>（可选）在右侧写整理要求，例如：<em>只要商品名称、69码、数量；69码和货号是同一个东西</em>。</li>
-                        <li>点「AI 字段归类」：「商品名称 / 品名 / 名称」「69码 / 条码 / 商品条码」这类写法不一的列会被归成一组。</li>
-                        <li>在「字段归类确认」里核对每一列的归属：可以改目标字段名、用下拉框调整归属、或忽略不需要的列。</li>
+                        <li>（可选）在右侧写整理要求，例如：<em>只要商品名称、69码、数量</em>，或者 <em>通过订单号把快递单号匹配到订单上，按模板整理</em>。</li>
+                        <li>点「AI 规划合并」：AI 会判断是「堆叠合并」还是「按键匹配」（比如订单表+快递表按电话对上），并把「商品名称 / 品名 / 名称」这类写法不一的列归成一组。</li>
+                        <li>在「合并计划确认」里核对：合并方式、匹配键和匹配预检（多少行能对上一目了然），再核对每列的归属。</li>
                         <li>点「开始合并」查看预览，确认后点「下载整理结果.xlsx」。</li>
                     </ol>
                     <p>提示：登录后 AI 归类更准（未登录走本地同义词规则）；13 位条码、前导零编码都会按文本保留，不会变形。</p>
@@ -221,9 +221,10 @@
 
                 <div id="mergeMappingSection" class="merge-mapping hidden">
                     <div class="merge-mapping-head">
-                        <h2>字段归类确认</h2>
-                        <p>下面是 AI 对各列的归类结果，同一目标字段会合并到一列。可以改目标字段名、调整每列的归属，或忽略不需要的列。</p>
+                        <h2>合并计划确认</h2>
+                        <p>先核对 AI 的合并计划和匹配预检，再核对每列的字段归类。可以改合并方式、匹配键、目标字段名，或忽略不需要的列。</p>
                     </div>
+                    <div id="mergePlanPanel" class="merge-plan hidden"></div>
                     <div class="merge-field-chips-row">
                         <div id="mergeFieldChips" class="merge-field-chips"></div>
                         <button id="mergeAddFieldBtn" class="excel-mini-btn" type="button">+ 新增字段</button>
@@ -264,7 +265,7 @@
 
                 <div class="excel-setting-section">
                     <h3>整理要求（可选）</h3>
-                    <textarea id="mergeInstruction" rows="6" placeholder="例如：把所有进货表合并成一张表，只要商品名称、69码、数量、单价；69码、商品编码、货号是同一个东西。"></textarea>
+                    <textarea id="mergeInstruction" rows="6" placeholder="例如：把所有进货表合并成一张表，只要商品名称、69码、数量、单价。&#10;又如：通过订单号匹配人名电话快递单号，按模板整理成新表，其他的信息都不要。"></textarea>
                 </div>
 
                 <div class="excel-setting-section">
@@ -283,14 +284,14 @@
 
                 <p id="mergeStatus" class="excel-status"></p>
 
-                <button id="mergeClassifyBtn" class="excel-primary-action" type="button">AI 字段归类</button>
+                <button id="mergeClassifyBtn" class="excel-primary-action" type="button">AI 规划合并</button>
                 <button id="mergeRunBtn" class="excel-secondary-action" type="button">开始合并</button>
                 <button id="mergeDownloadBtn" class="excel-secondary-action hidden" type="button">下载整理结果.xlsx</button>
                 <button id="mergeClearBtn" class="excel-secondary-action" type="button">清空</button>
 
                 <div class="excel-tip">
                     <strong>小贴士</strong>
-                    <p>「商品名称 / 品名 / 名称」「69码 / 条码 / 商品条码」这类写法不一的字段，AI 会自动归成一类；归类结果可以逐列调整后再合并。</p>
+                    <p>要把两张表「对上」（比如订单表配快递单号），AI 会自己从数据里找匹配键——即使你说的键不存在，也会按实际重合的列匹配，并在计划里告诉你它用了什么。</p>
                 </div>
             </aside>
         </div>

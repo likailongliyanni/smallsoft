@@ -819,8 +819,14 @@
 
     class LocalZipReader {
         static async fromFile(file) {
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            return new LocalZipReader(bytes);
+            let buffer;
+            try {
+                buffer = await file.arrayBuffer();
+            } catch (error) {
+                // Chrome 在文件选中后被修改/占用/未同步完时会在这里抛错。
+                throw new Error(`无法读取文件内容（${error?.message || error}）。请确认文件已下载完整、没有被 Excel/WPS 打开占用，或先把文件复制到本地磁盘再试。`);
+            }
+            return new LocalZipReader(new Uint8Array(buffer));
         }
 
         constructor(bytes) {
@@ -890,8 +896,13 @@
     }
 
     async function inflateRaw(bytes) {
-        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        return new Uint8Array(await new Response(stream).arrayBuffer());
+        try {
+            const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+            return new Uint8Array(await new Response(stream).arrayBuffer());
+        } catch (error) {
+            // Chrome 把解压流出错统一报成「Failed to fetch」，包一层说明真实原因。
+            throw new Error(`xlsx 内部数据解压失败（${error?.message || error}）。文件可能损坏或未下载完整，请用 Excel/WPS 打开确认后另存为新的 .xlsx 再试。`);
+        }
     }
 
     async function readSharedStrings(zip) {

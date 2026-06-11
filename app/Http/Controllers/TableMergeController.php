@@ -22,6 +22,9 @@ class TableMergeController extends Controller
             'summary.template' => ['nullable', 'array'],
             'summary.template.file_name' => ['nullable', 'string', 'max:255'],
             'summary.template.fields' => ['nullable', 'array', 'max:100'],
+            'summary.key_overlaps' => ['nullable', 'array', 'max:40'],
+            'summary.key_overlaps.*.overlap' => ['nullable', 'integer', 'min:0'],
+            'summary.key_overlaps.*.coverage' => ['nullable', 'numeric', 'between:0,1'],
         ]);
 
         return $this->ok($planner->makePlan(

@@ -2296,6 +2296,88 @@ table .empty { text-align: center; color: #94a3b8; padding: 30px !important; fon
     font-size: 13px;
 }
 
+.merge-plan {
+    border: 1px solid #c7d2fe;
+    border-radius: 10px;
+    background: #f5f7ff;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+}
+
+.merge-plan-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.merge-plan select {
+    border: 1px solid #d5dde8;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #0f172a;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12px;
+}
+
+.merge-plan-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.merge-join-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.merge-join-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: #64748b;
+    font-size: 12px;
+    min-width: 180px;
+}
+
+.merge-join-keys {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.merge-join-keys-label {
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.merge-join-keyrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.merge-join-eq {
+    color: #4f46e5;
+    font-weight: 700;
+}
+
+.merge-plan-text {
+    margin: 10px 0 0;
+    color: #3730a3;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 .merge-field-chips-row {
     display: flex;
     align-items: flex-start;

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>表格整理本地测试台</title>
+<link rel="stylesheet" href="/assets/styles.css">
+<style>
+body { padding: 20px; background: #f8fafc; font-family: "Microsoft YaHei", sans-serif; }
+.harness-note { color: #64748b; font-size: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<p class="harness-note">本地测试台：只加载真实的 excel-automation-local.js / table-merge-local.js，未登录走本地规则路径。</p>
+
+<div id="tableMergePanel" class="excel-work-area">
+    <main class="excel-main">
+        <div class="excel-page-head">
+            <div>
+                <h1>表格整理（测试台）</h1>
+            </div>
+            <div class="merge-upload-group">
+                <label class="excel-upload-btn">
+                    <input id="mergeSourceFiles" type="file" accept=".xlsx" multiple>
+                    选择原始表
+                </label>
+                <label class="excel-upload-btn">
+                    <input id="mergeTemplateFile" type="file" accept=".xlsx">
+                    模板表（可选）
+                </label>
+            </div>
+        </div>
+
+        <div class="excel-file-row">
+            <div id="mergeFileList" class="merge-file-list">
+                <p class="merge-file-empty">还没有选择文件。</p>
+            </div>
+            <div id="mergeResultMeta" class="excel-meta">等待处理</div>
+        </div>
+
+        <div id="mergeMappingSection" class="merge-mapping hidden">
+            <div class="merge-mapping-head">
+                <h2>合并计划确认</h2>
+            </div>
+            <div id="mergePlanPanel" class="merge-plan hidden"></div>
+            <div class="merge-field-chips-row">
+                <div id="mergeFieldChips" class="merge-field-chips"></div>
+                <button id="mergeAddFieldBtn" class="excel-mini-btn" type="button">+ 新增字段</button>
+            </div>
+            <div class="tool-table-wrap merge-mapping-table">
+                <table>
+                    <thead>
+                        <tr><th>文件</th><th>Sheet</th><th>列</th><th>原表头</th><th>样例</th><th>归到目标字段</th></tr>
+                    </thead>
+                    <tbody id="mergeMappingBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="mergePreviewSection" class="merge-preview hidden">
+            <h2>合并结果预览（前 50 行）</h2>
+            <div class="tool-table-wrap">
+                <table id="mergePreviewTable"></table>
+            </div>
+        </div>
+    </main>
+
+    <aside class="excel-settings">
+        <div class="excel-setting-section">
+            <h3>整理要求（可选）</h3>
+            <textarea id="mergeInstruction" rows="4"></textarea>
+        </div>
+        <div class="excel-setting-section">
+            <h3>合并选项</h3>
+            <label class="excel-checkbox">
+                <input id="mergeSourceColumnsOpt" type="checkbox" checked>
+                <span>附加「来源文件 / 来源Sheet」两列</span>
+            </label>
+            <label class="excel-checkbox">
+                <input id="mergeDedupeOpt" type="checkbox">
+                <span>去除完全重复的行</span>
+            </label>
+        </div>
+        <div id="mergeWarnings" class="tool-warnings hidden"></div>
+        <p id="mergeStatus" class="excel-status"></p>
+        <button id="mergeClassifyBtn" class="excel-primary-action" type="button">AI 规划合并</button>
+        <button id="mergeRunBtn" class="excel-secondary-action" type="button">开始合并</button>
+        <button id="mergeDownloadBtn" class="excel-secondary-action hidden" type="button">下载整理结果.xlsx</button>
+        <button id="mergeClearBtn" class="excel-secondary-action" type="button">清空</button>
+    </aside>
+</div>
+
+<script>
+// 模拟正式页的 ?v=time() 防缓存
+document.write('<scr' + 'ipt src="/assets/excel-automation-local.js?v=' + Date.now() + '"></scr' + 'ipt>');
+document.write('<scr' + 'ipt src="/assets/table-merge-local.js?v=' + Date.now() + '"></scr' + 'ipt>');
+</script>
+<script>
+window.initTableMergeLocal({
+    userApi: async () => { throw new Error('测试台无后端'); },
+    escapeHtml: text => String(text ?? '')
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#39;'),
+    userTokenKey: 'harness_token_unused',
+});
+</script>
+</body>
+</html>
