@@ -14,6 +14,7 @@ use App\Http\Controllers\OrderController;
 use App\Http\Controllers\PatternsPublicController;
 use App\Http\Controllers\RulesController;
 use App\Http\Controllers\SpreadsheetImageController;
+use App\Http\Controllers\TableMergeController;
 use App\Http\Controllers\TrainingController;
 use App\Http\Controllers\UserProfileController;
 use Illuminate\Support\Facades\Route;
@@ -31,6 +32,7 @@ Route::post('/ai/images/upload', [AiImageController::class, 'upload']);
 Route::post('/ai/generate', [AiGenerationController::class, 'generate']);
 Route::get('/ai/models', [AiGenerationController::class, 'listModels']);
 Route::post('/excel-automation/image-extract/plan', [SpreadsheetImageController::class, 'plan']);
+Route::post('/excel-automation/table-merge/plan', [TableMergeController::class, 'plan']);
 Route::post('/feedback', [FeedbackController::class, 'store']);
 Route::get('/orders/mine', [OrderController::class, 'mine']);
 

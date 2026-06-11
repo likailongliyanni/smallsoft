@@ -1049,6 +1049,13 @@ function initSpreadsheetImages() {
             escapeHtml,
             userTokenKey,
         });
+        if (typeof window.initTableMergeLocal === 'function') {
+            window.initTableMergeLocal({
+                userApi,
+                escapeHtml,
+                userTokenKey,
+            });
+        }
         return;
     }
 

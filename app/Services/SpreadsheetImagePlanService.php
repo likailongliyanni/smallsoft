@@ -173,6 +173,7 @@ $system = <<<'PROMPT'
 5. 如果用户没有明确列字母，但摘要中某列 header 或样例值明显对应字段，应在 field_column_map 中写出推断列；例如某列样例值是 13 位且以 69 开头，通常可推断该列为 "69码"，但列字母要取摘要中的真实列。
 6. 不确定时优先保守，尽量使用用户明确指定的列和摘要中能证明的列，不要凭空编造字段。
 7. 图片匹配默认按图片锚点所在行或附近有数据的行，image_match_rule 固定输出 "anchor_row"。
+8. 原始表可能"写岔列"：例如 D 列是产品型号、E 列是69码，但部分行两者写反（同一列的样例值形态不一致，既有型号又有 13 位 69 开头数字）。这种情况仍按字段的主列输出 field_column_map，并且把相关的两个字段（如 "产品型号" 和 "69码"）都写入 field_column_map；浏览器端会按行校验值的形态，自动把写岔的行纠正回来。
 PROMPT;
 
         $user = json_encode([
@@ -260,8 +261,27 @@ PROMPT;
         ];
     }
 
+    /**
+     * 取模型配置。和 AliyunAiService 同一原则：.env 的 DASHSCOPE_API_KEY 是当前维护的
+     * 「阿里云全家桶」配置，优先使用；数据库 model_configs 是已废弃的旧表单，仅作回切兜底。
+     */
     private function activeModelConfig(): ?ModelConfig
     {
+        $apiKey = trim((string) env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')));
+        if ($apiKey !== '') {
+            $spec = AliyunAiService::MODELS[AliyunAiService::DEFAULT_KEY];
+            $config = new ModelConfig();
+            $config->provider = 'aliyun';
+            $config->base_url = AliyunAiService::BASE_URL;
+            $config->model = $spec['model'];
+            $config->api_key_encrypted = Crypt::encryptString($apiKey);
+            $config->temperature = $spec['temperature'];
+            $config->max_tokens = $spec['max_tokens'];
+            $config->request_timeout = $spec['request_timeout'];
+
+            return $config;
+        }
+
         $config = ModelConfig::query()
             ->where('enabled', true)
             ->where('purpose', 'script')
@@ -272,33 +292,7 @@ PROMPT;
             return $config;
         }
 
-        $provider = config('ai.default_provider', 'aliyun');
-        $providerConfig = config("ai.providers.{$provider}", config('ai.providers.aliyun', []));
-        $apiKeyEnv = $providerConfig['api_key_env'] ?? match ($provider) {
-            'deepseek' => 'DEEPSEEK_API_KEY',
-            'openai-compatible' => 'OPENAI_COMPATIBLE_API_KEY',
-            default => 'DASHSCOPE_API_KEY',
-        };
-
-        $apiKey = trim((string) env($apiKeyEnv, ''));
-        if ($apiKey === '' && $provider === 'aliyun') {
-            $apiKey = trim((string) env('ALIYUN_API_KEY', ''));
-        }
-        if ($apiKey === '') {
-            return null;
-        }
-
-        $defaults = config('ai.defaults.script', []);
-        $config = new ModelConfig();
-        $config->provider = $provider;
-        $config->base_url = $defaults['base_url'] ?? ($providerConfig['base_url'] ?? null);
-        $config->model = $defaults['model'] ?? ($providerConfig['model'] ?? null);
-        $config->api_key_encrypted = Crypt::encryptString($apiKey);
-        $config->temperature = $defaults['temperature'] ?? config('ai.temperature', 0.2);
-        $config->max_tokens = $defaults['max_tokens'] ?? config('ai.max_tokens', 8192);
-        $config->request_timeout = $defaults['request_timeout'] ?? config('ai.request_timeout', 180);
-
-        return $config->base_url && $config->model ? $config : null;
+        return null;
     }
 
     private function explicitColumn(string $instruction, array $keywords): ?string
@@ -422,9 +416,10 @@ PROMPT;
         $lower = mb_strtolower($message, 'UTF-8');
 
         if (str_contains($lower, 'invalid_api_key')
+            || str_contains($lower, 'invalidapikey')
             || str_contains($lower, 'incorrect api key')
             || str_contains($lower, '401')) {
-            return 'AI Key 无效，请在后台模型配置中更新阿里云 API Key。';
+            return 'AI Key 无效，请检查服务器 .env 里的 DASHSCOPE_API_KEY。';
         }
 
         if (str_contains($lower, 'timeout') || str_contains($lower, 'timed out')) {

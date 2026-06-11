@@ -30,6 +30,10 @@
         const sheetTabs = document.querySelector('#sheetTabs');
         const gridPreview = document.querySelector('#sheetGridPreview');
         const imagePreview = document.querySelector('#sheetImagePreview');
+        const formatModeEl = document.querySelector('#sheetFormatMode');
+        const fullscreenBtn = document.querySelector('#sheetFullscreenBtn');
+        const planDetails = document.querySelector('#sheetPlanDetails');
+        const helpBtn = document.querySelector('#excelHelpBtn');
 
         let workbook = null;
         let activeSheetIndex = 0;
@@ -114,7 +118,8 @@
                 ? '正在生成 AI 规则并在本地整理图片...'
                 : '正在本地整理图片...');
             try {
-                const result = await exportImagesLocally(workbook, instruction, {userApi, userTokenKey});
+                const formatMode = formatModeEl?.value || 'auto';
+                const result = await exportImagesLocally(workbook, instruction, {userApi, userTokenKey}, {formatMode});
                 exportBlob = result.blob;
                 exportName = result.fileName;
                 renderExportResult(result);
@@ -131,6 +136,42 @@
         downloadBtn?.addEventListener('click', () => {
             if (!exportBlob) return;
             saveBlob(exportBlob, exportName);
+        });
+
+        fullscreenBtn?.addEventListener('click', () => {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else if (localPreview && !localPreview.classList.contains('hidden')) {
+                localPreview.requestFullscreen?.();
+            }
+        });
+
+        document.addEventListener('fullscreenchange', () => {
+            if (fullscreenBtn) {
+                fullscreenBtn.textContent = document.fullscreenElement ? '退出全屏' : '全屏';
+            }
+        });
+
+        helpBtn?.addEventListener('click', () => {
+            const visiblePanel = Array.from(document.querySelectorAll('.excel-work-area'))
+                .find(area => !area.classList.contains('hidden'));
+            const help = visiblePanel?.querySelector('details[data-help]');
+            if (help) {
+                help.open = true;
+                help.scrollIntoView({behavior: 'smooth', block: 'start'});
+            }
+        });
+
+        const sidebarToggleBtn = document.querySelector('#sidebarToggleBtn');
+        const excelLayout = document.querySelector('.excel-layout');
+        const sidebarStateKey = 'excel_sidebar_collapsed';
+        if (excelLayout && localStorage.getItem(sidebarStateKey) === '1') {
+            excelLayout.classList.add('sidebar-collapsed');
+        }
+        sidebarToggleBtn?.addEventListener('click', () => {
+            if (!excelLayout) return;
+            const collapsed = excelLayout.classList.toggle('sidebar-collapsed');
+            localStorage.setItem(sidebarStateKey, collapsed ? '1' : '0');
         });
 
         async function loginOrRegister(path) {
@@ -161,7 +202,7 @@
             if (!token) {
                 loginPanel?.classList.remove('hidden');
                 logoutBtn?.classList.add('hidden');
-                if (userBadge) userBadge.textContent = '本地处理';
+                if (userBadge) userBadge.textContent = '未登录 · 本地模式';
                 return;
             }
 
@@ -173,13 +214,13 @@
                 loginPanel?.classList.add('hidden');
                 logoutBtn?.classList.remove('hidden');
                 if (userBadge) {
-                    userBadge.textContent = `${user.username} · ${user.available_generations ?? 0} 次`;
+                    userBadge.textContent = `${user.username} · 剩余 ${user.available_generations ?? 0} 次`;
                 }
             } catch (error) {
                 localStorage.removeItem(userTokenKey);
                 loginPanel?.classList.remove('hidden');
                 logoutBtn?.classList.add('hidden');
-                if (userBadge) userBadge.textContent = '本地处理';
+                if (userBadge) userBadge.textContent = '未登录 · 本地模式';
             }
         }
 
@@ -268,7 +309,7 @@
             }
 
             if (planBox) {
-                planBox.classList.toggle('hidden', !data?.plan);
+                (planDetails || planBox).classList.toggle('hidden', !data?.plan);
                 planBox.textContent = data?.plan ? JSON.stringify({
                     source: data.plan_source,
                     used_provider: data.used_provider || null,
@@ -324,11 +365,12 @@
         }
     };
 
-    async function parseXlsxWorkbook(file) {
+    async function parseXlsxWorkbook(file, options = {}) {
         if (!('DecompressionStream' in window)) {
             throw new Error('当前浏览器不支持本地解压 xlsx，请使用新版 Chrome 或 Edge。');
         }
 
+        const withImages = options.images !== false;
         const zip = await LocalZipReader.fromFile(file);
         const sharedStrings = await readSharedStrings(zip);
         const sheetRefs = await readWorkbookSheets(zip);
@@ -336,7 +378,7 @@
 
         for (const sheetRef of sheetRefs) {
             const rowsInfo = await readSheetRows(zip, sheetRef.path, sharedStrings);
-            const images = await readSheetImages(zip, sheetRef.path);
+            const images = withImages ? await readSheetImages(zip, sheetRef.path) : [];
             const headerRow = guessHeaderRow(rowsInfo.rows, images);
             const headers = headersForRow(rowsInfo.rows.get(headerRow), rowsInfo.maxCol);
 
@@ -359,9 +401,12 @@
         return {fileName: file.name, zip, sheets};
     }
 
-    async function exportImagesLocally(workbook, instruction, apiDeps = {}) {
+    async function exportImagesLocally(workbook, instruction, apiDeps = {}, overrides = {}) {
         const planResult = await resolvePlan(workbook, instruction, apiDeps);
         const plan = planResult.plan;
+        if (overrides.formatMode && overrides.formatMode !== 'auto') {
+            plan.image_processing.format = normalizeImageFormat(overrides.formatMode);
+        }
         const files = [];
         const manifestRows = [];
         const warnings = [...(planResult.warnings || [])];
@@ -530,6 +575,7 @@
         if (!filenameTemplate) {
             addField('69码', barcodeKeywords);
             addField('货号', ['货号', '款号', 'sku', 'SKU', '编码', '商品编码', 'item', 'code']);
+            addField('型号', ['型号', '产品型号', 'model']);
             addField('颜色', ['颜色', '色号', 'color']);
             addField('尺码', ['尺码', '尺寸', 'size']);
             addField('品名', ['品名', '名称', '商品名', 'title', 'name']);
@@ -1228,6 +1274,7 @@
         const aliases = {
             '69码': ['69码', '69 码', '条码', '条形码', '商品条码', '国际条码', 'EAN', 'ean', 'barcode', 'bar code', 'UPC', 'upc'],
             货号: ['货号', '款号', 'sku', 'SKU', '编码', '商品编码', 'item', 'code'],
+            型号: ['型号', '产品型号', '规格型号', 'model'],
             颜色: ['颜色', '色号', 'color'],
             尺码: ['尺码', '尺寸', 'size'],
             品名: ['品名', '名称', '商品名', 'title', 'name'],
@@ -1248,7 +1295,58 @@
             values[normalizeKey(field)] = value;
         });
 
+        fixSwappedFieldValues(values, rowCells, fieldColumnMap);
+
         return values;
+    }
+
+    // 脏数据纠偏：有些表把型号和69码写岔了列（同一列里一行是型号、一行是69码）。
+    // 列级映射对这种行必然取错值，这里按行校验值的形态，不对就去同行其他列找回正确值。
+    function fixSwappedFieldValues(values, rowCells, fieldColumnMap) {
+        if (!rowCells) return;
+        const entries = Object.entries(fieldColumnMap || {})
+            .map(([field, column]) => ({
+                field: String(field).trim(),
+                col: columnNumber(`${String(column || '').trim()}1`),
+            }))
+            .filter(item => item.field && item.col);
+        if (!entries.length) return;
+
+        const barcodeCols = entries.filter(item => isBarcodeFieldName(item.field)).map(item => item.col);
+        const textCols = entries.filter(item => !isBarcodeFieldName(item.field)).map(item => item.col);
+
+        entries.forEach(({field, col}) => {
+            const current = String(rowCells.get(col) || '').trim();
+            if (!current) return;
+            const expectsBarcode = isBarcodeFieldName(field);
+            if (expectsBarcode === looksLikeBarcodeValue(current)) return;
+
+            const candidates = expectsBarcode
+                ? [...textCols, col + 1, col - 1, col + 2, col - 2]
+                : [...barcodeCols, col + 1, col - 1, col + 2, col - 2];
+
+            for (const candidate of candidates) {
+                if (!candidate || candidate < 1 || candidate === col) continue;
+                const value = String(rowCells.get(candidate) || '').trim();
+                if (!value) continue;
+                const fits = expectsBarcode
+                    ? looksLikeBarcodeValue(value)
+                    : !looksLikeBarcodeValue(value) && /[A-Za-z一-鿿]/u.test(value);
+                if (fits) {
+                    values[field] = value;
+                    values[normalizeKey(field)] = value;
+                    break;
+                }
+            }
+        });
+    }
+
+    function looksLikeBarcodeValue(value) {
+        return /^69\d{11}$/u.test(String(value || '').replace(/\s+/gu, ''));
+    }
+
+    function isBarcodeFieldName(field) {
+        return containsAny(field, ['69码', '69 码', '条码', '条形码', '商品条码', '国际条码', 'ean', 'barcode', 'upc']);
     }
 
     function renderTemplate(template, values) {
@@ -1406,4 +1504,17 @@
         }
         return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
     }
+
+    window.ExcelLocalKit = {
+        parseXlsxWorkbook,
+        createStoredZip,
+        saveBlob,
+        columnLetters,
+        columnNumber,
+        utf8Bytes,
+        hasAnyValue,
+        containsAny,
+        formatBytes,
+        headersForRow,
+    };
 })();

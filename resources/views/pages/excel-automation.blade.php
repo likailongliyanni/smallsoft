@@ -7,17 +7,20 @@
 @section('content')
 <section class="excel-app">
     <header class="excel-topbar">
-        <a class="excel-brand" href="/">
-            <span class="excel-brand-icon">X</span>
-            <span>
-                <strong>EXCEL自动化</strong>
-                <small>让 Excel 处理更简单高效</small>
-            </span>
-        </a>
+        <div class="excel-topbar-left">
+            <button id="sidebarToggleBtn" class="excel-icon-btn" type="button" title="收起 / 展开菜单">☰</button>
+            <a class="excel-brand" href="/">
+                <span class="excel-brand-icon">X</span>
+                <span>
+                    <strong>EXCEL自动化</strong>
+                    <small>让 Excel 处理更简单高效</small>
+                </span>
+            </a>
+        </div>
         <div class="excel-top-actions">
-            <button class="excel-icon-btn" type="button" title="帮助">?</button>
-            <button class="excel-text-btn" type="button">历史记录</button>
-            <span id="sheetUserBadge" class="excel-ai-badge">AI</span>
+            <button id="excelHelpBtn" class="excel-icon-btn" type="button" title="使用说明">?</button>
+            <a class="excel-recharge-btn" href="/#pricing" title="查看充值方式">充值额度</a>
+            <span id="sheetUserBadge" class="excel-user-chip">未登录 · 本地模式</span>
             <button id="sheetLogoutBtn" class="excel-text-btn hidden" type="button">退出</button>
         </div>
     </header>
@@ -26,9 +29,13 @@
         <aside class="excel-sidebar">
             <div class="excel-nav-block">
                 <span class="excel-nav-title">功能列表</span>
-                <button class="excel-nav-item active" type="button">
+                <button class="excel-nav-item active" type="button" data-panel="image-extract">
                     <span class="excel-nav-icon">▧</span>
                     图片提取
+                </button>
+                <button class="excel-nav-item" type="button" data-panel="table-merge">
+                    <span class="excel-nav-icon">⊞</span>
+                    表格整理
                 </button>
             </div>
 
@@ -37,7 +44,6 @@
                 <button class="excel-nav-item disabled" type="button" disabled>数据清洗</button>
                 <button class="excel-nav-item disabled" type="button" disabled>智能分类</button>
                 <button class="excel-nav-item disabled" type="button" disabled>批量翻译</button>
-                <button class="excel-nav-item disabled" type="button" disabled>数据合并</button>
             </div>
 
             <div class="excel-nav-block">
@@ -75,6 +81,17 @@
                     </label>
                 </div>
 
+                <details class="excel-help" data-help>
+                    <summary>使用说明</summary>
+                    <ol>
+                        <li>点「选择文件」打开一个 .xlsx 表格，文件只在浏览器本地读取，<strong>不会上传服务器</strong>。</li>
+                        <li>在右侧「图片提取要求」里用自己的话描述怎么保存，例如：<em>按69码创建文件夹，每个商品图片命名为 1.jpg、2.jpg；裁掉白边，统一 800x800</em>。</li>
+                        <li>点「开始提取」。登录后由 AI 把口语化要求转成精确规则（只发送表头和样例摘要）；未登录走本地规则。</li>
+                        <li>在右侧核对文件名预览，没问题就点「下载 ZIP」，ZIP 内附带 manifest.csv 清单。</li>
+                    </ol>
+                    <p>提示：要求写得越具体效果越好；「保存格式」下拉可以强制输出 JPG 或 PNG。</p>
+                </details>
+
                 <div class="excel-file-row">
                     <div class="excel-file-chip">
                         <span class="excel-file-icon">X</span>
@@ -91,7 +108,7 @@
                         <div id="sheetTabs" class="sheet-tabs"></div>
                         <div class="excel-preview-actions">
                             <span>本地预览</span>
-                            <button class="excel-text-btn" type="button">全屏</button>
+                            <button id="sheetFullscreenBtn" class="excel-text-btn" type="button">全屏</button>
                         </div>
                     </div>
                     <div class="sheet-preview-layout">
@@ -101,8 +118,6 @@
                         <div class="sheet-image-strip" id="sheetImagePreview"></div>
                     </div>
                 </div>
-
-                <p id="sheetExportResult" class="excel-status"></p>
             </main>
 
             <aside class="excel-settings">
@@ -115,18 +130,6 @@
                 </div>
 
                 <div class="excel-setting-section">
-                    <h3>提取范围</h3>
-                    <label class="excel-radio">
-                        <input type="radio" name="range_mode" checked>
-                        <span>提取所有图片列</span>
-                    </label>
-                    <label class="excel-radio">
-                        <input type="radio" name="range_mode" disabled>
-                        <span>自定义列（后续开放）</span>
-                    </label>
-                </div>
-
-                <div class="excel-setting-section">
                     <h3>图片提取要求</h3>
                     <textarea id="sheetInstruction" name="instruction" rows="7" required placeholder="例如：按69码创建文件夹，每个商品图片命名为 1.jpg、2.jpg、3.jpg；所有 sheet 都处理；裁掉白边，统一 800x800。"></textarea>
                 </div>
@@ -135,21 +138,16 @@
                     <h3>保存设置</h3>
                     <label class="excel-select-label">
                         保存格式
-                        <select name="format_mode">
-                            <option>按要求自动判断</option>
-                            <option>原格式</option>
-                            <option>JPG</option>
-                            <option>PNG</option>
+                        <select id="sheetFormatMode" name="format_mode">
+                            <option value="auto">按要求自动判断</option>
+                            <option value="original">原格式</option>
+                            <option value="jpg">JPG</option>
+                            <option value="png">PNG</option>
                         </select>
-                    </label>
-                    <label class="excel-checkbox">
-                        <input type="checkbox" checked disabled>
-                        <span>按行创建子文件夹</span>
                     </label>
                 </div>
 
                 <div id="sheetWarnings" class="tool-warnings hidden"></div>
-                <div id="sheetPlanBox" class="tool-code hidden"></div>
 
                 <div class="tool-table-wrap hidden" id="sheetPreviewWrap">
                     <table>
@@ -165,6 +163,13 @@
                     </table>
                 </div>
 
+                <details id="sheetPlanDetails" class="excel-plan-details hidden">
+                    <summary>查看执行规则（调试）</summary>
+                    <div id="sheetPlanBox" class="tool-code"></div>
+                </details>
+
+                <p id="sheetExportResult" class="excel-status"></p>
+
                 <button class="excel-primary-action" id="sheetExportBtn" type="submit">开始提取</button>
                 <button id="sheetDownloadBtn" class="excel-secondary-action hidden" type="button">下载 ZIP</button>
                 <button class="excel-secondary-action" id="sheetClearBtn" type="button">清空</button>
@@ -175,8 +180,123 @@
                 </div>
             </aside>
         </form>
+
+        <div id="tableMergePanel" class="excel-work-area hidden">
+            <main class="excel-main">
+                <div class="excel-page-head">
+                    <div>
+                        <h1>表格整理</h1>
+                        <p>上传多个原始表（可多 sheet），AI 把写法不一的字段归类，人工确认后合并成规范表。</p>
+                    </div>
+                    <div class="merge-upload-group">
+                        <label class="excel-upload-btn">
+                            <input id="mergeSourceFiles" type="file" accept=".xlsx" multiple>
+                            选择原始表
+                        </label>
+                        <label class="excel-upload-btn">
+                            <input id="mergeTemplateFile" type="file" accept=".xlsx">
+                            模板表（可选）
+                        </label>
+                    </div>
+                </div>
+
+                <details class="excel-help" data-help>
+                    <summary>使用说明</summary>
+                    <ol>
+                        <li>点「选择原始表」上传一个或多个 .xlsx（支持多个 sheet），文件只在浏览器本地读取，<strong>不会上传服务器</strong>。需要固定字段和顺序时再传一个「模板表」。</li>
+                        <li>（可选）在右侧写整理要求，例如：<em>只要商品名称、69码、数量；69码和货号是同一个东西</em>。</li>
+                        <li>点「AI 字段归类」：「商品名称 / 品名 / 名称」「69码 / 条码 / 商品条码」这类写法不一的列会被归成一组。</li>
+                        <li>在「字段归类确认」里核对每一列的归属：可以改目标字段名、用下拉框调整归属、或忽略不需要的列。</li>
+                        <li>点「开始合并」查看预览，确认后点「下载整理结果.xlsx」。</li>
+                    </ol>
+                    <p>提示：登录后 AI 归类更准（未登录走本地同义词规则）；13 位条码、前导零编码都会按文本保留，不会变形。</p>
+                </details>
+
+                <div class="excel-file-row">
+                    <div id="mergeFileList" class="merge-file-list">
+                        <p class="merge-file-empty">还没有选择文件。原始表可多选，支持多个 sheet。</p>
+                    </div>
+                    <div id="mergeResultMeta" class="excel-meta">等待处理</div>
+                </div>
+
+                <div id="mergeMappingSection" class="merge-mapping hidden">
+                    <div class="merge-mapping-head">
+                        <h2>字段归类确认</h2>
+                        <p>下面是 AI 对各列的归类结果，同一目标字段会合并到一列。可以改目标字段名、调整每列的归属，或忽略不需要的列。</p>
+                    </div>
+                    <div class="merge-field-chips-row">
+                        <div id="mergeFieldChips" class="merge-field-chips"></div>
+                        <button id="mergeAddFieldBtn" class="excel-mini-btn" type="button">+ 新增字段</button>
+                    </div>
+                    <div class="tool-table-wrap merge-mapping-table">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>文件</th>
+                                    <th>Sheet</th>
+                                    <th>列</th>
+                                    <th>原表头</th>
+                                    <th>样例</th>
+                                    <th>归到目标字段</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mergeMappingBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="mergePreviewSection" class="merge-preview hidden">
+                    <h2>合并结果预览（前 50 行）</h2>
+                    <div class="tool-table-wrap">
+                        <table id="mergePreviewTable"></table>
+                    </div>
+                </div>
+            </main>
+
+            <aside class="excel-settings">
+                <div class="excel-settings-head">
+                    <span class="excel-setting-icon">⊞</span>
+                    <div>
+                        <h2>表格整理设置</h2>
+                        <p>文件只在浏览器本地读取，不上传服务器</p>
+                    </div>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>整理要求（可选）</h3>
+                    <textarea id="mergeInstruction" rows="6" placeholder="例如：把所有进货表合并成一张表，只要商品名称、69码、数量、单价；69码、商品编码、货号是同一个东西。"></textarea>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>合并选项</h3>
+                    <label class="excel-checkbox">
+                        <input id="mergeSourceColumnsOpt" type="checkbox" checked>
+                        <span>附加「来源文件 / 来源Sheet」两列</span>
+                    </label>
+                    <label class="excel-checkbox">
+                        <input id="mergeDedupeOpt" type="checkbox">
+                        <span>去除完全重复的行</span>
+                    </label>
+                </div>
+
+                <div id="mergeWarnings" class="tool-warnings hidden"></div>
+
+                <p id="mergeStatus" class="excel-status"></p>
+
+                <button id="mergeClassifyBtn" class="excel-primary-action" type="button">AI 字段归类</button>
+                <button id="mergeRunBtn" class="excel-secondary-action" type="button">开始合并</button>
+                <button id="mergeDownloadBtn" class="excel-secondary-action hidden" type="button">下载整理结果.xlsx</button>
+                <button id="mergeClearBtn" class="excel-secondary-action" type="button">清空</button>
+
+                <div class="excel-tip">
+                    <strong>小贴士</strong>
+                    <p>「商品名称 / 品名 / 名称」「69码 / 条码 / 商品条码」这类写法不一的字段，AI 会自动归成一类；归类结果可以逐列调整后再合并。</p>
+                </div>
+            </aside>
+        </div>
     </div>
 </section>
 
 <script src="/assets/excel-automation-local.js?v={{ time() }}"></script>
+<script src="/assets/table-merge-local.js?v={{ time() }}"></script>
 @endsection

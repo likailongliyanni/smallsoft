@@ -9,7 +9,34 @@
     <div class="hero-badge">网页后台批量操作助手</div>
     <h1>你操作一遍<br>软件批量替你操作</h1>
     <p>发货、调价、上传资料、维护商品信息、填写网页表单<br>凡是需要一条一条重复点击和填写的工作，都可以交给软件批量完成</p>
-    <a class="btn" href="/download">免费试用</a>
+    <div class="hero-actions">
+        <a class="btn" href="/download">免费试用</a>
+        <a class="btn btn-outline" href="/excel-automation">在线 EXCEL 工具</a>
+    </div>
+</section>
+
+<section id="excel-tools" class="features">
+    <h2>在线 EXCEL 工具 · 打开网页就能用</h2>
+    <div class="feat-grid">
+        <div class="feat">
+            <div class="feat-ico">▧</div>
+            <h3>图片提取</h3>
+            <p>从 Excel 批量提取内嵌图片，AI 理解你的要求，按 69码 / 货号自动命名、分文件夹打包下载</p>
+        </div>
+        <div class="feat">
+            <div class="feat-ico">⊞</div>
+            <h3>表格整理</h3>
+            <p>多个原始表合并成规范表，「品名 / 名称 / 商品名称」这类写法不一的字段 AI 自动归类，人工确认后一键合并</p>
+        </div>
+        <div class="feat">
+            <div class="feat-ico">＋</div>
+            <h3>更多功能陆续上线</h3>
+            <p>数据清洗、智能分类、批量翻译等小工具持续更新。表格文件全程在浏览器本地处理，不上传服务器</p>
+        </div>
+    </div>
+    <div class="excel-tools-cta">
+        <a class="btn" href="/excel-automation">立即在线使用</a>
+    </div>
 </section>
 
 <section id="features" class="features">

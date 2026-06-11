@@ -17,6 +17,7 @@
         </a>
         <nav class="site-nav">
             <a href="#features">功能</a>
+            <a href="/excel-automation">EXCEL工具</a>
             <a href="#pricing">价格</a>
             <a href="/tutorial">📖 教程</a>
             <a href="#contact">联系</a>
