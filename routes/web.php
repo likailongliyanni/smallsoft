@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 
 Route::view('/', 'pages.index')->name('home');
+Route::view('/snap-saver', 'pages.snap-saver')->name('snap-saver');
 Route::view('/admin', 'pages.admin')->name('admin');
 Route::view('/download', 'pages.download')->name('download');
 Route::view('/tutorial', 'pages.tutorial')->name('tutorial');

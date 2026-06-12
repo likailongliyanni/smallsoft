@@ -19,7 +19,41 @@
             env('COS_REGION', 'ap-guangzhou'),
             rawurlencode($dlFileName)
         );
+        $snapFileName = '智能截图软件_V1.0.zip';
+        $cosBase = rtrim((string) env('COS_CDN_URL', ''), '/');
+        if ($cosBase !== '') {
+            $snapDlUrl = $cosBase.'/downloads/'.rawurlencode($snapFileName);
+        } else {
+            $snapDlUrl = sprintf(
+                'https://%s.cos.%s.myqcloud.com/downloads/%s',
+                env('COS_BUCKET', 'likailong-1349611745'),
+                env('COS_REGION', 'ap-guangzhou'),
+                rawurlencode($snapFileName)
+            );
+        }
+        $snapDlUrl = env('SNAP_SAVER_DOWNLOAD_URL', $snapDlUrl);
     @endphp
+
+    <div class="dl-card snap-download-card" id="snap-saver">
+        <div class="dl-card-head">
+            <div class="dl-ico">▣</div>
+            <div class="dl-info">
+                <div class="dl-name">智能截图软件 V1.0</div>
+                <div class="dl-meta">Windows 10/11 64位 · 无需注册 · 默认 50 张图片处理额度 · 支持多种图片修复</div>
+            </div>
+        </div>
+        <a class="btn btn-dl" href="{{ $snapDlUrl }}" download="{{ $snapFileName }}">
+            下载智能截图软件 V1.0
+        </a>
+        <div class="dl-tips">
+            <span>按住 Ctrl 拖动框选</span>
+            <span>主图 / 详情自动切换</span>
+            <span>自动打开下一条链接</span>
+            <span>AI 去水印 / 去贴纸</span>
+            <span>营销广告清爽化</span>
+            <span>软件编号充值</span>
+        </div>
+    </div>
 
     <div class="dl-card">
         <div class="dl-card-head">

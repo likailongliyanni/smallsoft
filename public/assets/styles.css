@@ -1245,6 +1245,32 @@ table .empty { text-align: center; color: #94a3b8; padding: 30px !important; fon
     .dl-tips { flex-direction: column; gap: 6px; }
     .step-grid { grid-template-columns: 1fr; }
     .dl-steps, .dl-faq, .dl-contact { padding: 40px 16px; }
+    .launch-strip,
+    .snap-hero,
+    .snap-grid {
+        grid-template-columns: 1fr;
+    }
+    .launch-strip {
+        margin: 20px 16px 0;
+        padding: 20px;
+    }
+    .snap-hero {
+        padding: 46px 16px 38px;
+    }
+    .snap-hero h1 {
+        font-size: 30px;
+    }
+    .snap-section {
+        padding: 42px 16px;
+    }
+    .snap-download-panel {
+        margin: 0 16px 46px;
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .snap-download-panel .btn {
+        text-align: center;
+    }
 }
 
 /* Spreadsheet image exporter */
@@ -2537,6 +2563,230 @@ table .empty { text-align: center; color: #94a3b8; padding: 30px !important; fon
 .excel-tools-cta {
     text-align: center;
     margin-top: 36px;
+}
+
+/* ---------- 智能截图软件入口 / 详情页 ---------- */
+
+.launch-strip {
+    max-width: 1120px;
+    margin: 34px auto 0;
+    padding: 28px;
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(320px, 1.05fr);
+    gap: 28px;
+    align-items: center;
+    border: 1px solid #d7eadf;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+}
+
+.launch-kicker {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: #ecfdf5;
+    color: #047857;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 14px;
+}
+
+.launch-copy h2 {
+    font-size: 28px;
+    color: #0f172a;
+    margin-bottom: 10px;
+}
+
+.launch-copy p {
+    color: #475569;
+    font-size: 15px;
+    line-height: 1.8;
+    margin-bottom: 20px;
+}
+
+.launch-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.launch-media img,
+.snap-hero-media img {
+    display: block;
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
+}
+
+.snap-hero {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 72px 24px 56px;
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+    gap: 36px;
+    align-items: center;
+}
+
+.snap-hero h1 {
+    font-size: 42px;
+    line-height: 1.25;
+    color: #0f172a;
+    margin-bottom: 18px;
+}
+
+.snap-hero p {
+    color: #475569;
+    font-size: 16px;
+    line-height: 1.85;
+    margin-bottom: 26px;
+}
+
+.snap-download-line {
+    margin-top: 16px;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.7;
+    word-break: break-all;
+}
+
+.snap-download-line code,
+.snap-file-note code {
+    color: #065f46;
+    background: #ecfdf5;
+    border: 1px solid #bbf7d0;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.snap-section {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 58px 24px;
+}
+
+.snap-section h2 {
+    text-align: center;
+    font-size: 28px;
+    color: #0f172a;
+    margin-bottom: 32px;
+}
+
+.snap-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+}
+
+.snap-card {
+    min-height: 180px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 24px;
+}
+
+.snap-card h3 {
+    font-size: 18px;
+    color: #0f172a;
+    margin-bottom: 10px;
+}
+
+.snap-card p {
+    color: #64748b;
+    font-size: 14px;
+    line-height: 1.8;
+}
+
+.snap-flow {
+    background: #f8fafc;
+    max-width: none;
+}
+
+.snap-flow h2,
+.snap-flow .snap-steps {
+    max-width: 980px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.snap-steps {
+    display: grid;
+    gap: 12px;
+}
+
+.snap-steps div {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.snap-steps strong {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    background: #16a34a;
+    color: #ffffff;
+}
+
+.snap-steps span {
+    color: #334155;
+    line-height: 1.7;
+}
+
+.snap-feature-list {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.snap-feature-list span {
+    border: 1px solid #bbf7d0;
+    border-radius: 999px;
+    background: #f0fdf4;
+    color: #166534;
+    padding: 9px 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.snap-download-panel {
+    max-width: 980px;
+    margin: 0 auto 70px;
+    padding: 28px;
+    display: flex;
+    justify-content: space-between;
+    gap: 28px;
+    align-items: center;
+    border: 1px solid #d7eadf;
+    border-radius: 8px;
+    background: #f8fffb;
+}
+
+.snap-download-panel h2 {
+    color: #0f172a;
+    margin-bottom: 8px;
+}
+
+.snap-download-panel p {
+    color: #475569;
+    line-height: 1.8;
+}
+
+.snap-download-card {
+    margin-bottom: 24px;
 }
 
 /* ---------- EXCEL 页顶栏：折叠按钮 / 用户信息 / 充值 ---------- */

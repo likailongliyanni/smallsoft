@@ -15,6 +15,21 @@
     </div>
 </section>
 
+<section class="launch-strip">
+    <div class="launch-copy">
+        <div class="launch-kicker">全新推出 · V1.0</div>
+        <h2>智能截图软件</h2>
+        <p>自动打开商品链接，按住 Ctrl 拖动鼠标框选图片，松开即保存。主图和详情图按数量自动切换，全部截完后可选择去水印、去贴纸、去营销广告或图片清爽化，再由 AI 先筛图并批量修复。</p>
+        <div class="launch-actions">
+            <a class="btn" href="/snap-saver">查看功能与下载</a>
+            <a class="btn btn-outline" href="/download#snap-saver">直接到下载区</a>
+        </div>
+    </div>
+    <div class="launch-media">
+        <img src="/assets/snap-saver-hero.png" alt="智能截图软件 V1.0 工作流示意图">
+    </div>
+</section>
+
 <section id="excel-tools" class="features">
     <h2>在线 EXCEL 工具 · 打开网页就能用</h2>
     <div class="feat-grid">
