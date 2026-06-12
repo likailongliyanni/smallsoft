@@ -222,11 +222,11 @@ def convert_to_jpg(source: Path, target: Path, quality: int):
 
 
 # ---------------- AI 去水印（阿里云百炼 DashScope） ----------------
-# 和网站后台同一套阿里云全家桶：模型 wanx2.1-imageedit 的 remove_watermark 功能。
+# 和网站后台同一套阿里云百炼图像模型：Qwen-Image-2.0 白底上架图修复。
 # 只用标准库 urllib，不增加打包体积。
 
 DASHSCOPE_BASE = "https://dashscope.aliyuncs.com"
-WATERMARK_MODEL = "wanx2.1-imageedit"
+WATERMARK_MODEL = "qwen-image-2.0"
 WATERMARK_MIN_SIDE = 512
 WATERMARK_MAX_SIDE = 4096
 WATERMARK_MAX_BYTES = 10 * 1024 * 1024
@@ -263,6 +263,8 @@ def friendly_dashscope_error(code: str, message: str) -> str:
     text = f"{code} {message}".lower()
     if "invalidapikey" in text or "invalid_api_key" in text or "incorrect api key" in text:
         return "API Key 无效，请检查填写的 DashScope Key。"
+    if "access_denied" in text or "access denied" in text:
+        return "阿里云模型权限不足：当前 Key 无权调用 Qwen-Image-2.0 图片修复模型，请在百炼开通对应模型。"
     if "arrearage" in text:
         return "阿里云账户欠费，请到百炼控制台充值。"
     if "throttling" in text or "ratelimit" in text or "rate limit" in text:
@@ -492,6 +494,61 @@ def ds_download_bytes(url: str) -> bytes:
         raise DashScopeError(f"下载结果图失败：{exc}")
 
 
+def qwen_repair_prompt() -> str:
+    return (
+        "请基于输入图片生成一张可直接用于电商平台上架的高级白底商品主图。"
+        "核心约束：只清理背景和后期叠加干扰，不要重新设计或重新拍摄商品。"
+        "必须保持原图中商品的数量、排列、朝向、拍摄角度、透视方向、姿态、可见零件位置和结构关系；"
+        "如果原图是双向展示、多台展示、左右对比或多角度展示，必须保持原来的数量、相对位置和各自角度，"
+        "不要合并成单台，不要换成新的角度。拿捏不准、被遮挡、看不清的部位，只做最小范围修补，"
+        "优先保留原图可见轮廓；不要根据常识脑补背面、侧面、支架、底座、叶片或其他看不见的结构。"
+        "允许在不改变主体角度和布局的前提下轻微居中、适度留白。"
+        "背景改为纯白或接近纯白，画面干净高级，边缘清晰，保留自然真实光影和轻微柔和投影。"
+        "清理水印、平台角标、促销文案、价格条、店铺名、网址、杂乱背景和无关物体。"
+        "必须保持商品型号、颜色、材质、比例、包装、真实品牌 logo、真实包装文字不变；"
+        "不要新增文案、不要新增配件、不要改变商品卖点，不要把商品画成卡通，不要过度美颜。输出单张清晰 PNG。"
+    )
+
+
+def ds_qwen_repair_url(api_key: str, path: Path, stop_event: threading.Event) -> str:
+    if stop_event.is_set():
+        raise DashScopeError("已停止。")
+    import base64
+
+    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    payload = {
+        "model": WATERMARK_MODEL,
+        "input": {
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"image": f"data:{mime};base64,{b64}"},
+                    {"text": qwen_repair_prompt()},
+                ],
+            }],
+        },
+        "parameters": {
+            "watermark": False,
+            "negative_prompt": "旋转商品、改变角度、改变视角、改变拍摄方向、改变朝向、改变姿态、改变透视、把正面改侧面、把侧面改正面、把多台商品合并成单台、改变商品数量、脑补商品背面或侧面、补错结构、虚假配件、改变商品结构、改变商品比例、改变支架形状、改变风扇高度、错误 logo、错误包装、新增文字、模糊、低清晰度、变形、错色、复杂背景、彩色背景、过度美颜、卡通风格",
+            "n": 1,
+            "prompt_extend": False,
+        },
+    }
+    response = _ds_request(
+        f"{DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation",
+        api_key,
+        payload,
+        timeout=300,
+    )
+    content = (((response.get("output") or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or []
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("image"):
+                return str(part["image"])
+    raise DashScopeError("Qwen-Image-2.0 修复成功但没有返回结果图。")
+
+
 def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
     """送 AI 前的预处理：统一转成尺寸合规（512~4096px、≤10MB）的 JPG 临时文件。"""
     with Image.open(path) as image:
@@ -532,12 +589,10 @@ def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
 
 def remove_watermark_to(api_key: str, source: Path, target: Path,
                         temp_dir: Path, stop_event: threading.Event):
-    """完整的单张去水印流程：预处理 → 上传 → 建任务 → 等结果 → 下载 → 存为 JPG。"""
+    """完整的单张修图流程：预处理 → Qwen 白底上图 → 下载 → 存为 JPG。"""
     prepared = prepare_watermark_input(source, temp_dir)
     try:
-        oss_url = ds_upload_image(api_key, prepared)
-        task_id = ds_create_watermark_task(api_key, oss_url)
-        result_url = ds_wait_task(api_key, task_id, stop_event)
+        result_url = ds_qwen_repair_url(api_key, prepared, stop_event)
         data = ds_download_bytes(result_url)
     finally:
         try:

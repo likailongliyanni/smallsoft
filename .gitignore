@@ -33,3 +33,6 @@ public/.well-known/acme-challenge/*
 
 .DS_Store
 Thumbs.db
+
+desktop/snap-saver/截图存图助手配置.json
+desktop/snap-saver/截图存图助手错误日志.txt

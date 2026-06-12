@@ -52,7 +52,7 @@ class DesktopWatermarkController extends Controller
             $remaining = $this->consumeImageQuota($user, $mode);
 
             return response($bytes, 200, [
-                'Content-Type' => 'image/jpeg',
+                'Content-Type' => 'image/png',
                 'Cache-Control' => 'no-store',
                 'X-Remaining-Quota' => (string) $remaining,
             ]);
@@ -90,7 +90,7 @@ class DesktopWatermarkController extends Controller
             'text_sticker' => '去除文字贴纸',
             'marketing' => '去除营销广告',
             'clean' => '图片清爽化',
-            'all' => '全部去除',
+            'all' => '白底上图',
             default => '去除水印',
         };
     }

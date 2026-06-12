@@ -4,11 +4,11 @@
 1. 导入「A列名称 + B列链接」列表，点开始 → 自动用系统默认浏览器打开当前行链接
 2. 在网页里按住 Ctrl + 鼠标左键拖框选区 → 松开自动截图保存到 输出/名称/主图(或详情)/
 3. 设定主图、详情张数：主图截够自动切详情，详情截够自动切下一行并打开下一个链接
-4. 全部截完选择修复类型并点「AI 智能修复」：AI 遍历本次截图，挑出疑似需要处理的让你确认/移除
+4. 全部截完选择修复类型并点「AI 智能修复」：弹出缩略图窗口，人工勾选要处理的图片
 5. 无需账号注册，软件自动读取本机 MAC 作为软件编号；新编号默认 50 张图片处理额度
 6. 确认后按成功处理张数扣减额度，结果覆盖原图，原图备份
 
-依赖：Pillow、openpyxl（可选，读 xlsx 用）。AI 检测和图片修复走服务器接口，
+依赖：Pillow、openpyxl（可选，读 xlsx 用）。图片修复走服务器接口，
 服务器使用已配置的阿里云百炼模型；客户端不保存阿里 API Key。
 """
 
@@ -35,7 +35,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageTk
 
 
 APP_NAME = "智能截图软件"
@@ -60,7 +60,7 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"}
 
 # 服务器端会用这些阿里云百炼模型；客户端默认通过服务器接口调用。
 DASHSCOPE_BASE = "https://dashscope.aliyuncs.com"
-WATERMARK_MODEL = "wanx2.1-imageedit"
+WATERMARK_MODEL = "qwen-image-2.0"
 DETECT_MODEL = "qwen-vl-max-latest"
 WATERMARK_MIN_SIDE = 512
 WATERMARK_MAX_SIDE = 4096
@@ -71,9 +71,10 @@ REPAIR_MODES = (
     ("text_sticker", "去除文字贴纸"),
     ("marketing", "去除营销广告"),
     ("clean", "图片清爽化"),
-    ("all", "全部去除"),
+    ("all", "白底上图"),
 )
 REPAIR_LABEL_TO_KEY = {label: key for key, label in REPAIR_MODES}
+REPAIR_LABEL_TO_KEY["全部去除"] = "all"
 REPAIR_KEY_TO_LABEL = {key: label for key, label in REPAIR_MODES}
 
 # 全局低级鼠标钩子常量
@@ -251,6 +252,24 @@ def parse_clipboard_rows(text: str) -> list:
     return rows
 
 
+def scan_image_folder(folder: Path) -> list[Path]:
+    root = Path(folder)
+    images: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if BACKUP_DIR_NAME in relative_parts:
+            continue
+        images.append(path)
+    return sorted(images, key=lambda item: str(item).lower())
+
+
 def convert_to_jpg(source: Path, target: Path, quality: int):
     with Image.open(source) as image:
         image.load()
@@ -277,10 +296,36 @@ class ServerApiError(RuntimeError):
     pass
 
 
+def is_fatal_ai_error(message: str) -> bool:
+    text = str(message or "").lower()
+    fatal_terms = (
+        "access_denied",
+        "access denied",
+        "forbidden",
+        "permission",
+        "invalidapikey",
+        "invalid_api_key",
+        "incorrect api key",
+        "dashscope_api_key",
+        "api key 无效",
+        "权限",
+        "无权",
+        "未开通",
+        "登记",
+        "额度不足",
+        "欠费",
+        "401",
+        "403",
+    )
+    return any(term.lower() in text for term in fatal_terms)
+
+
 def friendly_dashscope_error(code: str, message: str) -> str:
     text = f"{code} {message}".lower()
     if "invalidapikey" in text or "invalid_api_key" in text or "incorrect api key" in text:
         return "API Key 无效，请检查填写的 DashScope Key。"
+    if "access_denied" in text or "access denied" in text:
+        return "阿里云模型权限不足：当前 Key 无权调用图片检测/修复模型，请在百炼开通对应模型或更换已开通的模型。"
     if "arrearage" in text:
         return "阿里云账户欠费，请到百炼控制台充值。"
     if "throttling" in text or "ratelimit" in text or "rate limit" in text:
@@ -627,6 +672,56 @@ def ds_download_bytes(url: str) -> bytes:
         raise DashScopeError(f"下载结果图失败：{exc}")
 
 
+def qwen_repair_prompt() -> str:
+    return (
+        "请基于输入图片生成一张可直接用于电商平台上架的高级白底商品主图。"
+        "核心约束：只清理背景和后期叠加干扰，不要重新设计或重新拍摄商品。"
+        "必须保持原图中商品的数量、排列、朝向、拍摄角度、透视方向、姿态、可见零件位置和结构关系；"
+        "如果原图是双向展示、多台展示、左右对比或多角度展示，必须保持原来的数量、相对位置和各自角度，"
+        "不要合并成单台，不要换成新的角度。拿捏不准、被遮挡、看不清的部位，只做最小范围修补，"
+        "优先保留原图可见轮廓；不要根据常识脑补背面、侧面、支架、底座、叶片或其他看不见的结构。"
+        "允许在不改变主体角度和布局的前提下轻微居中、适度留白。"
+        "背景改为纯白或接近纯白，画面干净高级，边缘清晰，保留自然真实光影和轻微柔和投影。"
+        "清理水印、平台角标、促销文案、价格条、店铺名、网址、杂乱背景和无关物体。"
+        "必须保持商品型号、颜色、材质、比例、包装、真实品牌 logo、真实包装文字不变；"
+        "不要新增文案、不要新增配件、不要改变商品卖点，不要把商品画成卡通，不要过度美颜。输出单张清晰 PNG。"
+    )
+
+
+def ds_qwen_repair_url(api_key: str, path: Path, stop_event: threading.Event) -> str:
+    if stop_event.is_set():
+        raise DashScopeError("已停止。")
+    mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    payload = {
+        "model": WATERMARK_MODEL,
+        "input": {
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"image": f"data:{mime};base64,{b64}"},
+                    {"text": qwen_repair_prompt()},
+                ],
+            }],
+        },
+        "parameters": {
+            "watermark": False,
+            "negative_prompt": "旋转商品、改变角度、改变视角、改变拍摄方向、改变朝向、改变姿态、改变透视、把正面改侧面、把侧面改正面、把多台商品合并成单台、改变商品数量、脑补商品背面或侧面、补错结构、虚假配件、改变商品结构、改变商品比例、改变支架形状、改变风扇高度、错误 logo、错误包装、新增文字、模糊、低清晰度、变形、错色、复杂背景、彩色背景、过度美颜、卡通风格",
+            "n": 1,
+            "prompt_extend": False,
+        },
+    }
+    response = _ds_request(
+        f"{DASHSCOPE_BASE}/api/v1/services/aigc/multimodal-generation/generation",
+        api_key, payload, timeout=300)
+    content = (((response.get("output") or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or []
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("image"):
+                return str(part["image"])
+    raise DashScopeError("Qwen-Image-2.0 修复成功但没有返回结果图。")
+
+
 def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
     with Image.open(path) as image:
         image.load()
@@ -662,9 +757,7 @@ def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
 def remove_watermark_to(api_key: str, source: Path, target: Path, temp_dir: Path, stop_event: threading.Event):
     prepared = prepare_watermark_input(source, temp_dir)
     try:
-        oss_url = ds_upload_image(api_key, prepared)
-        task_id = ds_create_watermark_task(api_key, oss_url)
-        result_url = ds_wait_task(api_key, task_id, stop_event)
+        result_url = ds_qwen_repair_url(api_key, prepared, stop_event)
         data = ds_download_bytes(result_url)
     finally:
         try:
@@ -1053,6 +1146,216 @@ class ConfirmDialog(tk.Toplevel):
         self.destroy()
 
 
+class ManualRepairDialog(tk.Toplevel):
+    """缩略图人工勾选窗口：跳过 AI 检测，用户自己选择要修复的图片。"""
+
+    def __init__(self, owner, captures: list, mode_label: str):
+        super().__init__(owner.root)
+        self.owner = owner
+        self.mode_label = mode_label
+        self.title(f"选择要{mode_label}的图片")
+        self.geometry("940x680")
+        self.minsize(760, 520)
+        self.transient(owner.root)
+        self.result: list | None = None
+        self.items = []
+        self.photos = []
+
+        for capture in captures:
+            path = capture["path"]
+            self.items.append({
+                "path": path,
+                "name": str(capture.get("name") or path.parent.name),
+                "var": tk.BooleanVar(value=False),
+            })
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            self,
+            text=f"人工勾选需要「{mode_label}」的图片。只会处理你勾选的图片，不再做 AI 检测。",
+            style="Hint.TLabel",
+            wraplength=880,
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
+
+        holder = ttk.Frame(self)
+        holder.grid(row=1, column=0, sticky="nsew", padx=16)
+        holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(holder, bg=COLOR_BG, highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(holder, orient="vertical", command=self.canvas.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=scroll.set)
+
+        self.grid_frame = ttk.Frame(self.canvas)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.grid_frame, anchor="nw")
+        self.grid_frame.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        bar = ttk.Frame(self)
+        bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 0))
+        bar.columnconfigure(5, weight=1)
+        ttk.Button(bar, text="全选", command=self.select_all).grid(row=0, column=0)
+        ttk.Button(bar, text="全不选", command=self.clear_all).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(bar, text="反选", command=self.invert_selection).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(bar, text="打开选中", command=self.open_selected).grid(row=0, column=3, padx=(8, 0))
+        self.count_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.count_var, style="Hint.TLabel").grid(row=0, column=5, sticky="e")
+
+        action = ttk.Frame(self)
+        action.grid(row=3, column=0, sticky="ew", padx=16, pady=14)
+        action.columnconfigure(0, weight=1)
+        ttk.Button(action, text="取消", command=self._cancel).grid(row=0, column=1)
+        ttk.Button(action, text="确认修复", style="Accent.TButton", command=self._confirm).grid(
+            row=0, column=2, padx=(8, 0))
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.render_items()
+        self.update_count()
+
+    def render_items(self):
+        columns = 4
+        for col in range(columns):
+            self.grid_frame.columnconfigure(col, weight=1, uniform="thumb")
+
+        for index, item in enumerate(self.items):
+            row, col = divmod(index, columns)
+            card = tk.Frame(
+                self.grid_frame,
+                bg=COLOR_CARD,
+                padx=8,
+                pady=8,
+                highlightbackground=COLOR_BORDER,
+                highlightthickness=1,
+            )
+            card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+            card.columnconfigure(0, weight=1)
+
+            image_label = tk.Label(card, bg=COLOR_CARD, cursor="hand2")
+            image_label.grid(row=0, column=0, sticky="nsew")
+            self._set_thumbnail(image_label, item["path"])
+            image_label.bind("<Button-1>", lambda _event, i=index: self.toggle(i))
+            image_label.bind("<Double-1>", lambda _event, i=index: self.open_item(i))
+
+            cb = ttk.Checkbutton(
+                card,
+                variable=item["var"],
+                command=self.update_count,
+                text=item["path"].name,
+            )
+            cb.grid(row=1, column=0, sticky="w", pady=(8, 0))
+            ttk.Label(
+                card,
+                text=item["name"],
+                style="CardHint.TLabel",
+                wraplength=180,
+            ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+            item["var"].trace_add("write", lambda *_args: self.update_count())
+
+    def _set_thumbnail(self, label, path: Path):
+        try:
+            with Image.open(path) as image:
+                image.load()
+                image = ImageOps.exif_transpose(image)
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                image.thumbnail((180, 140), Image.LANCZOS)
+                thumb = ImageTk.PhotoImage(image)
+            label.configure(image=thumb, width=180, height=140)
+            label.image = thumb
+            self.photos.append(thumb)
+        except Exception:
+            label.configure(
+                text="无法预览\n"+path.name,
+                width=22,
+                height=8,
+                fg="#b91c1c",
+                justify="center",
+            )
+
+    def _on_frame_configure(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+
+    def _on_mousewheel(self, event):
+        if not self.winfo_exists():
+            return
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def toggle(self, index: int):
+        item = self.items[index]
+        item["var"].set(not item["var"].get())
+
+    def selected_items(self) -> list:
+        return [item for item in self.items if item["var"].get()]
+
+    def update_count(self):
+        count = len(self.selected_items())
+        self.count_var.set(f"已选 {count}/{len(self.items)} 张；成功修复每张扣 1 张额度")
+
+    def select_all(self):
+        for item in self.items:
+            item["var"].set(True)
+        self.update_count()
+
+    def clear_all(self):
+        for item in self.items:
+            item["var"].set(False)
+        self.update_count()
+
+    def invert_selection(self):
+        for item in self.items:
+            item["var"].set(not item["var"].get())
+        self.update_count()
+
+    def open_item(self, index: int):
+        try:
+            os.startfile(str(self.items[index]["path"]))
+        except Exception as exc:
+            messagebox.showinfo(APP_NAME, f"无法打开图片：{exc}", parent=self)
+
+    def open_selected(self):
+        selected = self.selected_items()
+        if not selected:
+            messagebox.showinfo(APP_NAME, "请先勾选一张图片。", parent=self)
+            return
+        self.open_item(self.items.index(selected[0]))
+
+    def _confirm(self):
+        selected = self.selected_items()
+        if not selected:
+            messagebox.showinfo(APP_NAME, "请先勾选需要修复的图片。", parent=self)
+            return
+        if self.mode_label == "白底上图":
+            if not messagebox.askyesno(
+                    APP_NAME,
+                    "「白底上图」会把背景和画面氛围改成电商白底主图。\n\n"
+                    "适合直接做上架主图；如果必须保留原场景，请选择更窄的修复类型。\n\n"
+                    "确定继续使用「白底上图」吗？",
+                    parent=self):
+                return
+        if not messagebox.askyesno(
+                APP_NAME,
+                f"确定用「{self.mode_label}」处理 {len(selected)} 张图吗？\n\n"
+                f"成功处理每张扣 1 张图片额度，本次最多扣除 {len(selected)} 张。",
+                parent=self):
+            return
+        self.canvas.unbind_all("<MouseWheel>")
+        self.result = [item["path"] for item in selected]
+        self.destroy()
+
+    def _cancel(self):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.result = None
+        self.destroy()
+
+
 # ---------------- 主程序 ----------------
 
 class SnapSaverApp:
@@ -1164,15 +1467,15 @@ class SnapSaverApp:
         ttk.Label(title_line, textvariable=self.hook_state_var, style="Hint.TLabel").grid(
             row=0, column=1, sticky="e")
 
-        ttk.Label(header, text="高效截图 · 智能识别 · 一键导出", style="Subtitle.TLabel").grid(
+        ttk.Label(header, text="高效截图 · 人工勾选 · 一键修复", style="Subtitle.TLabel").grid(
             row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(header, text="导入名称+链接后自动打开网页；按住 Ctrl 拖动鼠标框选，松开自动保存；截完后选择修复类型，AI 先筛图再批量修复。",
+        ttk.Label(header, text="导入名称+链接后自动打开网页；按住 Ctrl 拖动鼠标框选，松开自动保存；截完后选择修复类型，人工勾选缩略图再批量修复。",
                   style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 0))
 
         chips = ttk.Frame(header)
         chips.grid(row=3, column=0, sticky="w", pady=(18, 0))
         for col, (icon, title, desc) in enumerate((
-                ("▣", "智能识别", "自动检测需修复图片"),
+                ("▣", "人工勾选", "缩略图快速选择"),
                 ("↯", "高效操作", "一键截图快速采集"),
                 ("✓", "便捷管理", "分类保存轻松查找"),
         )):
@@ -1242,6 +1545,7 @@ class SnapSaverApp:
         self.repair_mode_combo.grid(row=0, column=6)
         self.repair_button = ttk.Button(toolbar, text="AI 智能修复", command=self.ai_repair)
         self.repair_button.grid(row=0, column=7, padx=(8, 0))
+        ttk.Button(toolbar, text="导入图片文件夹", command=self.import_image_folder).grid(row=0, column=8, padx=(8, 0))
 
         # 列表 + 日志
         body = ttk.Panedwindow(root, orient="horizontal")
@@ -1387,6 +1691,77 @@ class SnapSaverApp:
             messagebox.showinfo(APP_NAME, "剪贴板是空的。", parent=self.root)
             return
         self.set_rows(parse_clipboard_rows(text))
+
+    def import_image_folder(self):
+        if self.busy:
+            messagebox.showinfo(APP_NAME, "AI 正在处理图片，请稍后再导入。", parent=self.root)
+            return
+        if self.work_mode:
+            messagebox.showinfo(APP_NAME, "请先结束截图，再导入图片文件夹。", parent=self.root)
+            return
+        folder = filedialog.askdirectory(title="选择要修复的图片文件夹", parent=self.root)
+        if not folder:
+            return
+        root = Path(folder)
+        images = scan_image_folder(root)
+        if not images:
+            messagebox.showinfo(APP_NAME, "这个文件夹里没有找到可处理的图片。", parent=self.root)
+            return
+
+        replace = True
+        if self.captures:
+            answer = messagebox.askyesnocancel(
+                APP_NAME,
+                f"当前待修复列表已有 {len(self.captures)} 张图片。\n\n"
+                "是：替换为这个文件夹\n"
+                "否：追加到当前列表\n"
+                "取消：不导入",
+                parent=self.root,
+            )
+            if answer is None:
+                return
+            replace = bool(answer)
+        if replace:
+            self.captures = []
+
+        existing = set()
+        for capture in self.captures:
+            try:
+                existing.add(str(capture["path"].resolve()).lower())
+            except Exception:
+                existing.add(str(capture.get("path", "")).lower())
+
+        imported = 0
+        skipped = 0
+        root_resolved = root.resolve()
+        for image_path in images:
+            try:
+                key = str(image_path.resolve()).lower()
+            except Exception:
+                key = str(image_path).lower()
+            if key in existing:
+                skipped += 1
+                continue
+            try:
+                relative = image_path.resolve().relative_to(root_resolved)
+            except Exception:
+                relative = Path(image_path.name)
+            parent = relative.parent
+            name = root.name if str(parent) in ("", ".") else str(parent)
+            self.captures.append({
+                "path": image_path,
+                "row_index": None,
+                "name": name,
+                "category": "文件夹导入",
+            })
+            existing.add(key)
+            imported += 1
+
+        self.set_status(f"已导入图片文件夹：{imported} 张，可直接点「AI 智能修复」。")
+        message = f"从图片文件夹导入 {imported} 张：{root}"
+        if skipped:
+            message += f"；跳过重复 {skipped} 张"
+        self.log(message)
 
     def set_rows(self, rows: list):
         if not rows:
@@ -1732,33 +2107,34 @@ class SnapSaverApp:
         if self.busy:
             return
         if not self.captures:
-            messagebox.showinfo(APP_NAME, "本次还没有任何截图。", parent=self.root)
-            return
-        if not self.ensure_server_login():
+            messagebox.showinfo(APP_NAME, "还没有任何截图或导入的图片。", parent=self.root)
             return
         existing = [c for c in self.captures if c["path"].exists()]
         if not existing:
-            messagebox.showinfo(APP_NAME, "截图文件都不在了。", parent=self.root)
+            messagebox.showinfo(APP_NAME, "图片文件都不在了。", parent=self.root)
             return
         mode_key = normalize_repair_mode(self.repair_mode_var.get())
         mode_label = repair_mode_label(mode_key)
         self.repair_mode_var.set(mode_label)
         save_config({"repair_mode": mode_key})
-        server_url = normalize_server_url(self.server_url_var.get())
-        token = self.server_token
+        self.show_main()
+        dialog = ManualRepairDialog(self, existing, mode_label)
+        self.root.wait_window(dialog)
+        targets = dialog.result
+        if not targets:
+            self.set_status("已取消图片修复。")
+            return
+        if not self.ensure_server_login():
+            return
         self.busy = True
         self.stop_event = threading.Event()
         self.repair_button.configure(state="disabled")
-        self.set_status(f"AI 正在检测 {len(existing)} 张截图是否需要「{mode_label}」...")
-        self.log(f"开始检测 {len(existing)} 张截图，修复类型：{mode_label}。")
-        self.ai_events = queue.Queue()
-        self.ai_thread = threading.Thread(
-            target=self._detect_worker, args=(server_url, token, existing, mode_key, mode_label), daemon=True)
-        self.ai_thread.start()
-        self.root.after(200, self._poll_detect)
+        self.log(f"人工选择 {len(targets)} 张图片，修复类型：{mode_label}。")
+        self._start_remove(targets, mode_key, mode_label)
 
     def _detect_worker(self, server_url: str, token: str, captures: list, mode_key: str, mode_label: str):
         candidates = []
+        failures = 0
         for index, capture in enumerate(captures):
             if self.stop_event.is_set():
                 break
@@ -1769,12 +2145,17 @@ class SnapSaverApp:
                     candidates.append({"path": capture["path"], "name": capture["name"], "note": result["note"]})
             except ServerApiError as exc:
                 message = str(exc)
+                failures += 1
                 self.ai_events.put(("error", message, capture["path"].name))
-                if "登记" in message or "额度不足" in message or "欠费" in message:
+                if is_fatal_ai_error(message):
                     self.ai_events.put(("fatal", message))
                     return
             except Exception as exc:
+                failures += 1
                 self.ai_events.put(("error", str(exc), capture["path"].name))
+        if captures and failures >= len(captures) and not candidates and not self.stop_event.is_set():
+            self.ai_events.put(("fatal", "所有图片检测都失败了，请先检查服务器模型配置、网络或额度后再试。"))
+            return
         self.ai_events.put(("detect_done", candidates, mode_key, mode_label))
 
     def _poll_detect(self):
@@ -1852,9 +2233,11 @@ class SnapSaverApp:
                 self.ai_events.put(("removed", index + 1, len(targets), path.name, mode_label))
             except ServerApiError as exc:
                 failed += 1
-                self.ai_events.put(("rm_error", str(exc), path.name))
-                if "登记" in str(exc) or "额度不足" in str(exc) or "欠费" in str(exc):
-                    break
+                message = str(exc)
+                self.ai_events.put(("rm_error", message, path.name))
+                if is_fatal_ai_error(message):
+                    self.ai_events.put(("rm_fatal", message))
+                    return
             except Exception as exc:
                 failed += 1
                 self.ai_events.put(("rm_error", str(exc), path.name))
@@ -1870,6 +2253,15 @@ class SnapSaverApp:
                     self.log(f"{event[4]}完成：{event[3]}")
                 elif kind == "rm_error":
                     self.log(f"图片修复失败：{event[2]} —— {event[1]}")
+                elif kind == "rm_fatal":
+                    self.busy = False
+                    self.repair_button.configure(state="normal")
+                    if self.temp_dir:
+                        shutil.rmtree(self.temp_dir, ignore_errors=True)
+                        self.temp_dir = None
+                    self.set_status(f"图片修复停止：{event[1]}")
+                    messagebox.showerror(APP_NAME, f"图片修复停止：\n{event[1]}", parent=self.root)
+                    return
                 elif kind == "remove_done":
                     self._on_remove_done(event[1], event[2])
                     return
