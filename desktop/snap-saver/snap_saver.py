@@ -975,59 +975,68 @@ class FloatPanel(tk.Toplevel):
     def __init__(self, owner):
         super().__init__(owner.root)
         self.owner = owner
-        self.title("智能截图软件 V1.0")
+        self.title(f"{APP_NAME} {APP_VERSION}")
         self.attributes("-topmost", True)
         self.resizable(False, False)
         self.configure(bg=COLOR_BG)
         self.protocol("WM_DELETE_WINDOW", owner.stop_work)
 
-        frame = tk.Frame(self, bg=COLOR_CARD, padx=16, pady=14,
+        frame = tk.Frame(self, bg=COLOR_CARD, padx=14, pady=12,
                          highlightbackground="#c9d7cf", highlightthickness=1)
-        frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        frame.columnconfigure(0, weight=1)
+        frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        frame.columnconfigure(0, weight=1, uniform="half")
+        frame.columnconfigure(1, weight=1, uniform="half")
 
         title_row = tk.Frame(frame, bg=COLOR_CARD)
-        title_row.grid(row=0, column=0, sticky="ew")
+        title_row.grid(row=0, column=0, columnspan=2, sticky="ew")
         title_row.columnconfigure(0, weight=1)
-        tk.Label(title_row, text=f"智能截图软件 {APP_VERSION}", bg=COLOR_CARD, fg=COLOR_TEXT,
-                 font=("Microsoft YaHei UI", 13, "bold")).grid(row=0, column=0, sticky="w")
-        tk.Button(title_row, text="×", command=owner.stop_work, bd=0, bg=COLOR_CARD,
-                  fg="#334155", activebackground="#f1f5f9",
-                  font=("Microsoft YaHei UI", 12)).grid(row=0, column=1)
+        tk.Label(title_row, text="●  截图中", bg=COLOR_CARD, fg=COLOR_GREEN,
+                 font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Button(title_row, text="结束 ✕", command=owner.stop_work, bd=0, bg=COLOR_CARD,
+                  fg=COLOR_MUTED, activebackground="#f1f5f9", cursor="hand2",
+                  font=("Microsoft YaHei UI", 9)).grid(row=0, column=1)
 
         tk.Label(frame, textvariable=owner.panel_name_var, bg=COLOR_CARD, fg=COLOR_TEXT,
-                 font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
-            row=1, column=0, sticky="ew", pady=(12, 2))
+                 font=("Microsoft YaHei UI", 12, "bold"), anchor="w", wraplength=230,
+                 justify="left").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 2))
         tk.Label(frame, textvariable=owner.panel_progress_var, bg=COLOR_CARD, fg=COLOR_MUTED,
-                 font=("Microsoft YaHei UI", 9), anchor="w").grid(row=2, column=0, sticky="ew", pady=(0, 12))
+                 font=("Microsoft YaHei UI", 9), anchor="w", wraplength=230,
+                 justify="left").grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        self.main_btn = self._panel_button(frame, "▣  主图", lambda: owner.set_category(MAIN_CATEGORY), 3)
-        self.detail_btn = self._panel_button(frame, "☰  详情", lambda: owner.set_category(DETAIL_CATEGORY), 4)
-        self.next_btn = self._panel_button(frame, "↓  下一行", owner.next_row_manual, 5)
-        self.copy_btn = self._panel_button(frame, "↶  复制上一行", owner.copy_previous, 6)
-        self.reopen_btn = self._panel_button(frame, "↻  重开链接", owner.open_current_link, 7)
+        self.main_btn = self._panel_button(frame, "▣  主图", lambda: owner.set_category(MAIN_CATEGORY),
+                                           row=3, column=0, padx=(0, 4))
+        self.detail_btn = self._panel_button(frame, "☰  详情", lambda: owner.set_category(DETAIL_CATEGORY),
+                                             row=3, column=1, padx=(4, 0))
 
-        tk.Button(frame, text="⌂  显示主程序", command=owner.show_main,
-                  bg=COLOR_GREEN, fg="#ffffff", activebackground=COLOR_GREEN_DARK,
-                  activeforeground="#ffffff", bd=0, relief="flat", cursor="hand2",
-                  font=("Microsoft YaHei UI", 12, "bold"), padx=12, pady=12).grid(
-            row=8, column=0, sticky="ew", pady=(10, 0))
+        self.next_btn = tk.Button(frame, text="下一行  ▶", command=owner.next_row_manual,
+                                  bg=COLOR_GREEN, fg="#ffffff", activebackground=COLOR_GREEN_DARK,
+                                  activeforeground="#ffffff", bd=0, relief="flat", cursor="hand2",
+                                  font=("Microsoft YaHei UI", 12, "bold"), padx=12, pady=10)
+        self.next_btn.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+
+        self.copy_btn = self._panel_button(frame, "复制上一行", owner.copy_previous,
+                                           row=5, column=0, padx=(0, 4))
+        self.reopen_btn = self._panel_button(frame, "重开链接", owner.open_current_link,
+                                             row=5, column=1, padx=(4, 0))
+        self.show_btn = self._panel_button(frame, "显示主程序", owner.show_main,
+                                           row=6, column=0, columnspan=2)
 
         tk.Label(frame, text="按住 Ctrl + 鼠标拖动框选截图", bg=COLOR_CARD, fg=COLOR_MUTED,
-                 font=("Microsoft YaHei UI", 9), anchor="w").grid(row=9, column=0, sticky="ew", pady=(12, 0))
+                 font=("Microsoft YaHei UI", 9), anchor="center").grid(
+            row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.update_idletasks()
         screen_w = self.winfo_screenwidth()
         self.geometry(f"+{screen_w - self.winfo_width() - 40}+60")
         self.refresh_category()
 
-    def _panel_button(self, parent, text, command, row):
-        button = tk.Button(parent, text=text, command=command, anchor="w",
+    def _panel_button(self, parent, text, command, row, column=0, columnspan=1, padx=0):
+        button = tk.Button(parent, text=text, command=command,
                            bg="#ffffff", fg=COLOR_TEXT, activebackground="#f8fafc",
                            activeforeground=COLOR_TEXT, bd=0, relief="flat", cursor="hand2",
                            highlightbackground="#d7ded9", highlightthickness=1,
-                           font=("Microsoft YaHei UI", 12), padx=16, pady=10)
-        button.grid(row=row, column=0, sticky="ew", pady=(0, 8))
+                           font=("Microsoft YaHei UI", 10), padx=10, pady=7)
+        button.grid(row=row, column=column, columnspan=columnspan, sticky="ew", padx=padx, pady=(0, 8))
         return button
 
     def refresh_category(self):
@@ -1035,9 +1044,11 @@ class FloatPanel(tk.Toplevel):
         for btn, name in ((self.main_btn, MAIN_CATEGORY), (self.detail_btn, DETAIL_CATEGORY)):
             try:
                 if name == active:
-                    btn.configure(bg=COLOR_GREEN_SOFT, fg=COLOR_GREEN, highlightbackground=COLOR_GREEN)
+                    btn.configure(bg=COLOR_GREEN_SOFT, fg=COLOR_GREEN, highlightbackground=COLOR_GREEN,
+                                  font=("Microsoft YaHei UI", 10, "bold"))
                 else:
-                    btn.configure(bg="#ffffff", fg=COLOR_TEXT, highlightbackground="#d7ded9")
+                    btn.configure(bg="#ffffff", fg=COLOR_TEXT, highlightbackground="#d7ded9",
+                                  font=("Microsoft YaHei UI", 10))
             except tk.TclError:
                 pass
 
@@ -1397,6 +1408,7 @@ class SnapSaverApp:
         self.category_var = tk.StringVar(value=MAIN_CATEGORY)
 
         self.status_var = tk.StringVar(value="导入「名称+链接」列表，点开始即可。")
+        self.progress_summary_var = tk.StringVar(value="尚未导入列表")
         self.panel_name_var = tk.StringVar(value="-")
         self.panel_progress_var = tk.StringVar(value="主图 0/0 · 详情 0/0")
         self.hook_state_var = tk.StringVar(value="")
@@ -1422,21 +1434,28 @@ class SnapSaverApp:
         style.configure("Card.TFrame", background=COLOR_CARD)
         style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
         style.configure("Card.TLabel", background=COLOR_CARD, foreground=COLOR_TEXT)
-        style.configure("TButton", padding=(12, 7), background="#ffffff", foreground=COLOR_TEXT, bordercolor=COLOR_BORDER)
-        style.configure("Accent.TButton", padding=(14, 8), background=COLOR_GREEN, foreground="#ffffff",
+        style.configure("TButton", padding=(10, 5), background="#ffffff", foreground=COLOR_TEXT,
+                        bordercolor=COLOR_BORDER)
+        style.map("TButton", background=[("active", "#f1f5f9")])
+        style.configure("Accent.TButton", padding=(20, 6), background=COLOR_GREEN, foreground="#ffffff",
                         bordercolor=COLOR_GREEN, font=("Microsoft YaHei UI", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", COLOR_GREEN_DARK)], foreground=[("active", "#ffffff")])
+        style.map("Accent.TButton", background=[("disabled", "#a7d9bd"), ("active", COLOR_GREEN_DARK)],
+                  foreground=[("disabled", "#ffffff"), ("active", "#ffffff")])
+        style.configure("Repair.TButton", padding=(14, 6), background=COLOR_GREEN_SOFT,
+                        foreground=COLOR_GREEN_DARK, bordercolor=COLOR_GREEN,
+                        font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("Repair.TButton", background=[("active", "#ddf5e7")])
         style.configure("Title.TLabel", background=COLOR_BG, foreground=COLOR_TEXT,
-                        font=("Microsoft YaHei UI", 28, "bold"))
-        style.configure("Subtitle.TLabel", background=COLOR_BG, foreground="#334155",
-                        font=("Microsoft YaHei UI", 14))
+                        font=("Microsoft YaHei UI", 15, "bold"))
         style.configure("Hint.TLabel", foreground=COLOR_MUTED, background=COLOR_BG)
         style.configure("CardHint.TLabel", foreground=COLOR_MUTED, background=COLOR_CARD)
         style.configure("Status.TLabel", foreground=COLOR_GREEN_DARK, background=COLOR_BG)
+        style.configure("Card.TCheckbutton", background=COLOR_CARD, foreground=COLOR_TEXT)
+        style.map("Card.TCheckbutton", background=[("active", COLOR_CARD)])
         style.configure("TLabelframe", background=COLOR_CARD, bordercolor=COLOR_BORDER, relief="solid")
-        style.configure("TLabelframe.Label", background=COLOR_CARD, foreground=COLOR_TEXT,
-                        font=("Microsoft YaHei UI", 10, "bold"))
-        style.configure("Treeview", rowheight=30, background="#ffffff", fieldbackground="#ffffff",
+        style.configure("TLabelframe.Label", background=COLOR_CARD, foreground=COLOR_MUTED,
+                        font=("Microsoft YaHei UI", 9, "bold"))
+        style.configure("Treeview", rowheight=28, background="#ffffff", fieldbackground="#ffffff",
                         foreground=COLOR_TEXT, bordercolor=COLOR_BORDER)
         style.configure("Treeview.Heading", background="#f8fafc", foreground="#334155",
                         font=("Microsoft YaHei UI", 10, "bold"))
@@ -1455,86 +1474,87 @@ class SnapSaverApp:
         root.columnconfigure(0, weight=1)
         root.rowconfigure(3, weight=1)
 
-        header = ttk.Frame(root, padding=(28, 24, 28, 10))
+        # 顶栏：标题 + 钩子状态 + 额度
+        header = ttk.Frame(root, padding=(20, 12, 20, 8))
         header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=1)
 
-        title_line = ttk.Frame(header)
-        title_line.grid(row=0, column=0, sticky="ew")
-        title_line.columnconfigure(0, weight=1)
-        ttk.Label(title_line, text=f"智能截图软件  {APP_VERSION}", style="Title.TLabel").grid(
-            row=0, column=0, sticky="w")
-        ttk.Label(title_line, textvariable=self.hook_state_var, style="Hint.TLabel").grid(
-            row=0, column=1, sticky="e")
+        title_box = ttk.Frame(header)
+        title_box.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text=APP_NAME, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(title_box, text=f" {APP_VERSION} · 按住 Ctrl 拖动框选，松开自动保存",
+                  style="Hint.TLabel").grid(row=0, column=1, sticky="sw", pady=(0, 3))
 
-        ttk.Label(header, text="高效截图 · 人工勾选 · 一键修复", style="Subtitle.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(header, text="导入名称+链接后自动打开网页；按住 Ctrl 拖动鼠标框选，松开自动保存；截完后选择修复类型，人工勾选缩略图再批量修复。",
-                  style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        status_box = ttk.Frame(header)
+        status_box.grid(row=0, column=2, sticky="e")
+        ttk.Label(status_box, textvariable=self.hook_state_var, style="Status.TLabel").grid(
+            row=0, column=0, sticky="e", padx=(0, 12))
+        tk.Label(status_box, textvariable=self.quota_var, bg=COLOR_GREEN_SOFT, fg=COLOR_GREEN_DARK,
+                 font=("Microsoft YaHei UI", 9, "bold"), padx=10, pady=4).grid(row=0, column=1, sticky="e")
 
-        chips = ttk.Frame(header)
-        chips.grid(row=3, column=0, sticky="w", pady=(18, 0))
-        for col, (icon, title, desc) in enumerate((
-                ("▣", "人工勾选", "缩略图快速选择"),
-                ("↯", "高效操作", "一键截图快速采集"),
-                ("✓", "便捷管理", "分类保存轻松查找"),
-        )):
-            chip = tk.Frame(chips, bg=COLOR_CARD, padx=12, pady=8,
-                            highlightbackground=COLOR_BORDER, highlightthickness=1)
-            chip.grid(row=0, column=col, padx=(0, 12))
-            tk.Label(chip, text=icon, bg=COLOR_CARD, fg=COLOR_GREEN,
-                     font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, rowspan=2, padx=(0, 8))
-            tk.Label(chip, text=title, bg=COLOR_CARD, fg=COLOR_GREEN,
-                     font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=1, sticky="w")
-            tk.Label(chip, text=desc, bg=COLOR_CARD, fg=COLOR_MUTED,
-                     font=("Microsoft YaHei UI", 8)).grid(row=1, column=1, sticky="w")
+        # 设置区：左「采集设置」+ 右「服务与额度」
+        cfg_row = ttk.Frame(root, padding=(20, 0, 20, 8))
+        cfg_row.grid(row=1, column=0, sticky="ew")
+        cfg_row.columnconfigure(0, weight=3)
+        cfg_row.columnconfigure(1, weight=2)
 
-        # 设置区
-        cfg = ttk.LabelFrame(root, text="运行设置", padding=(18, 12))
-        cfg.grid(row=1, column=0, sticky="ew", padx=28, pady=(8, 10))
-        cfg.columnconfigure(1, weight=1)
+        work = ttk.LabelFrame(cfg_row, text="采集设置", padding=(14, 6, 14, 10))
+        work.grid(row=0, column=0, sticky="nsew")
+        work.columnconfigure(1, weight=1)
 
-        ttk.Label(cfg, text="服务器").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(cfg, textvariable=self.server_url_var).grid(row=0, column=1, columnspan=3, sticky="ew")
-        ttk.Label(cfg, textvariable=self.device_state_var, style="Hint.TLabel").grid(row=0, column=4, sticky="e", padx=(8, 0))
+        ttk.Label(work, text="输出目录", style="Card.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(work, textvariable=self.output_dir_var).grid(row=0, column=1, sticky="ew")
+        ttk.Button(work, text="选择", command=self.choose_output).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(work, text="打开", command=self.open_output).grid(row=0, column=3, padx=(4, 0))
 
-        ttk.Label(cfg, text="软件编号").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
-        self.software_id_entry = ttk.Entry(cfg, textvariable=self.software_id_var, state="readonly")
-        self.software_id_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(cfg, text="复制编号", command=self.copy_software_id).grid(row=1, column=3, padx=(8, 0), pady=(8, 0))
-        ttk.Button(cfg, text="同步额度", command=self.sync_quota).grid(row=1, column=4, padx=(8, 0), pady=(8, 0))
-        ttk.Label(cfg, textvariable=self.quota_var, style="Hint.TLabel").grid(
-            row=2, column=1, columnspan=4, sticky="w", pady=(6, 0))
-
-        ttk.Label(cfg, text="输出目录").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
-        ttk.Entry(cfg, textvariable=self.output_dir_var).grid(row=3, column=1, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(cfg, text="选择", command=self.choose_output).grid(row=3, column=3, padx=(8, 0), pady=(8, 0))
-        ttk.Button(cfg, text="打开", command=self.open_output).grid(row=3, column=4, padx=(8, 0), pady=(8, 0))
-
-        nums = ttk.Frame(cfg)
-        nums.grid(row=4, column=0, columnspan=5, sticky="w", pady=(10, 0))
-        ttk.Label(nums, text="主图").grid(row=0, column=0, padx=(0, 6))
+        nums = ttk.Frame(work, style="Card.TFrame")
+        nums.grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Label(nums, text="主图", style="Card.TLabel").grid(row=0, column=0, padx=(0, 6))
         ttk.Spinbox(nums, from_=0, to=99, width=5, textvariable=self.main_count_var).grid(row=0, column=1)
-        ttk.Label(nums, text="详情").grid(row=0, column=2, padx=(14, 6))
+        ttk.Label(nums, text="详情", style="Card.TLabel").grid(row=0, column=2, padx=(14, 6))
         ttk.Spinbox(nums, from_=0, to=99, width=5, textvariable=self.detail_count_var).grid(row=0, column=3)
-        ttk.Label(nums, text="（截够自动切换 / 下一行）", style="Hint.TLabel").grid(row=0, column=4, padx=(8, 0))
-        ttk.Label(nums, text="文件名前缀").grid(row=0, column=5, padx=(20, 6))
-        ttk.Entry(nums, width=8, textvariable=self.prefix_var).grid(row=0, column=6)
-        ttk.Label(nums, text="JPG质量").grid(row=0, column=7, padx=(14, 6))
-        ttk.Spinbox(nums, from_=30, to=100, width=5, textvariable=self.quality_var).grid(row=0, column=8)
-        ttk.Checkbutton(nums, text="切行自动开链接", variable=self.auto_open_var).grid(row=0, column=9, padx=(16, 0))
+        ttk.Label(nums, text="文件名前缀", style="Card.TLabel").grid(row=0, column=4, padx=(18, 6))
+        ttk.Entry(nums, width=8, textvariable=self.prefix_var).grid(row=0, column=5)
+        ttk.Label(nums, text="JPG质量", style="Card.TLabel").grid(row=0, column=6, padx=(14, 6))
+        ttk.Spinbox(nums, from_=30, to=100, width=5, textvariable=self.quality_var).grid(row=0, column=7)
 
-        # 工具条
-        toolbar = ttk.Frame(root, padding=(28, 0, 28, 10))
+        opts = ttk.Frame(work, style="Card.TFrame")
+        opts.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(opts, text="切行自动开链接", variable=self.auto_open_var,
+                        style="Card.TCheckbutton").grid(row=0, column=0, sticky="w")
+        ttk.Label(opts, text="主图/详情截够自动切换、自动下一行", style="CardHint.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(14, 0))
+
+        svc = ttk.LabelFrame(cfg_row, text="服务与额度", padding=(14, 6, 14, 10))
+        svc.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        svc.columnconfigure(1, weight=1)
+
+        ttk.Label(svc, text="软件编号", style="Card.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.software_id_entry = ttk.Entry(svc, textvariable=self.software_id_var, state="readonly")
+        self.software_id_entry.grid(row=0, column=1, sticky="ew")
+        ttk.Button(svc, text="复制", command=self.copy_software_id).grid(row=0, column=2, padx=(8, 0))
+
+        ttk.Label(svc, text="服务器", style="Card.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Entry(svc, textvariable=self.server_url_var).grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        ttk.Button(svc, text="同步额度", command=self.sync_quota).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
+
+        ttk.Label(svc, textvariable=self.device_state_var, style="CardHint.TLabel").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        # 操作栏：导入 | 截图 | AI 修复
+        toolbar = ttk.Frame(root, padding=(20, 0, 20, 8))
         toolbar.grid(row=2, column=0, sticky="ew")
         ttk.Button(toolbar, text="导入文件", command=self.import_file).grid(row=0, column=0)
-        ttk.Button(toolbar, text="从剪贴板导入", command=self.import_clipboard).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(toolbar, text="清空列表", command=self.clear_rows).grid(row=0, column=2, padx=(8, 0))
-        self.start_button = ttk.Button(toolbar, text="开始截图", style="Accent.TButton", command=self.start_work)
-        self.start_button.grid(row=0, column=3, padx=(24, 0))
+        ttk.Button(toolbar, text="从剪贴板导入", command=self.import_clipboard).grid(row=0, column=1, padx=(6, 0))
+        ttk.Button(toolbar, text="导入图片文件夹", command=self.import_image_folder).grid(row=0, column=2, padx=(6, 0))
+        ttk.Button(toolbar, text="清空列表", command=self.clear_rows).grid(row=0, column=3, padx=(6, 0))
+        ttk.Separator(toolbar, orient="vertical").grid(row=0, column=4, sticky="ns", padx=14)
+        self.start_button = ttk.Button(toolbar, text="▶  开始截图", style="Accent.TButton", command=self.start_work)
+        self.start_button.grid(row=0, column=5)
         self.stop_button = ttk.Button(toolbar, text="结束截图", command=self.stop_work, state="disabled")
-        self.stop_button.grid(row=0, column=4, padx=(8, 0))
-        ttk.Label(toolbar, text="修复类型").grid(row=0, column=5, padx=(24, 6))
+        self.stop_button.grid(row=0, column=6, padx=(6, 0))
+        ttk.Separator(toolbar, orient="vertical").grid(row=0, column=7, sticky="ns", padx=14)
+        ttk.Label(toolbar, text="修复类型").grid(row=0, column=8, padx=(0, 6))
         self.repair_mode_combo = ttk.Combobox(
             toolbar,
             textvariable=self.repair_mode_var,
@@ -1542,22 +1562,27 @@ class SnapSaverApp:
             state="readonly",
             width=12,
         )
-        self.repair_mode_combo.grid(row=0, column=6)
-        self.repair_button = ttk.Button(toolbar, text="AI 智能修复", command=self.ai_repair)
-        self.repair_button.grid(row=0, column=7, padx=(8, 0))
-        ttk.Button(toolbar, text="导入图片文件夹", command=self.import_image_folder).grid(row=0, column=8, padx=(8, 0))
+        self.repair_mode_combo.grid(row=0, column=9)
+        self.repair_button = ttk.Button(toolbar, text="AI 智能修复", style="Repair.TButton", command=self.ai_repair)
+        self.repair_button.grid(row=0, column=10, padx=(8, 0))
 
         # 列表 + 日志
         body = ttk.Panedwindow(root, orient="horizontal")
-        body.grid(row=3, column=0, sticky="nsew", padx=28, pady=(0, 10))
+        body.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 8))
         left = ttk.Frame(body)
         right = ttk.Frame(body)
         body.add(left, weight=3)
-        body.add(right, weight=2)
+        body.add(right, weight=1)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(1, weight=1)
-        ttk.Label(left, text="商品截图进度", font=("Microsoft YaHei UI", 11, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 6))
+
+        list_head = ttk.Frame(left)
+        list_head.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        list_head.columnconfigure(0, weight=1)
+        ttk.Label(list_head, text="商品截图进度", font=("Microsoft YaHei UI", 11, "bold")).grid(
+            row=0, column=0, sticky="w")
+        ttk.Label(list_head, textvariable=self.progress_summary_var, style="Hint.TLabel").grid(
+            row=0, column=1, sticky="e")
 
         columns = ("index", "name", "link", "main", "detail", "status")
         self.tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="browse")
@@ -1571,17 +1596,27 @@ class SnapSaverApp:
         tree_scroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         tree_scroll.grid(row=1, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=tree_scroll.set)
+        self.tree.tag_configure("even", background="#f7fbf8")
+        self.tree.tag_configure("current", background=COLOR_GREEN_SOFT, foreground=COLOR_GREEN_DARK)
+        self.tree.tag_configure("done", foreground=COLOR_MUTED)
 
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
         ttk.Label(right, text="运行日志", font=("Microsoft YaHei UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-        self.log_box = scrolledtext.ScrolledText(right, width=36, wrap="word")
-        self.log_box.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        self.log_box = scrolledtext.ScrolledText(
+            right, width=30, wrap="word", font=("Microsoft YaHei UI", 9),
+            bd=0, relief="flat", highlightthickness=1,
+            highlightbackground=COLOR_BORDER, highlightcolor=COLOR_BORDER)
+        self.log_box.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         self.log_box.configure(state="disabled")
 
-        footer = ttk.Frame(root, padding=(28, 0, 28, 16))
+        # 底部状态栏
+        footer = tk.Frame(root, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
         footer.grid(row=4, column=0, sticky="ew")
-        ttk.Label(footer, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=0, sticky="w")
+        tk.Label(footer, textvariable=self.status_var, bg=COLOR_CARD, fg=COLOR_GREEN_DARK,
+                 font=("Microsoft YaHei UI", 9), anchor="w", padx=20, pady=6).grid(
+            row=0, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
 
     # ----- 通用 -----
 
@@ -1786,8 +1821,15 @@ class SnapSaverApp:
         self.tree.delete(*self.tree.get_children())
         for index, row in enumerate(self.rows):
             main_done, detail_done = self.counts_for(index)
-            mark = "▶" if (self.work_mode and index == self.current_index) else ""
-            self.tree.insert("", "end", iid=str(index), values=(
+            is_current = self.work_mode and index == self.current_index
+            mark = "▶" if is_current else ""
+            if is_current:
+                tag = "current"
+            elif row["status"] == "完成":
+                tag = "done"
+            else:
+                tag = "even" if index % 2 else ""
+            self.tree.insert("", "end", iid=str(index), tags=(tag,) if tag else (), values=(
                 f"{mark}{index + 1}", row["name"],
                 "有" if row["link"] else "无",
                 main_done, detail_done, row["status"]))
@@ -1797,6 +1839,12 @@ class SnapSaverApp:
                 self.tree.see(str(self.current_index))
             except tk.TclError:
                 pass
+        total = len(self.rows)
+        if total:
+            finished = sum(1 for row in self.rows if row["status"] == "完成")
+            self.progress_summary_var.set(f"完成 {finished}/{total} 行 · 本次截图 {len(self.captures)} 张")
+        else:
+            self.progress_summary_var.set("尚未导入列表")
 
     def counts_for(self, index: int) -> tuple:
         if not (0 <= index < len(self.rows)):
