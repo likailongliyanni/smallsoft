@@ -259,19 +259,21 @@ class DashScopeError(RuntimeError):
     pass
 
 
+# 注意：致命错误（连接失败/服务不可用/额度不足）的文案统一含「客服」，
+# 下游靠「客服」二字判断是否停止重试——改这些文案时必须保留该词。
 def friendly_dashscope_error(code: str, message: str) -> str:
     text = f"{code} {message}".lower()
     if "invalidapikey" in text or "invalid_api_key" in text or "incorrect api key" in text:
-        return "API Key 无效，请检查填写的 DashScope Key。"
+        return "图片修复服务连接失败，请联系客服。"
     if "access_denied" in text or "access denied" in text:
-        return "阿里云模型权限不足：当前 Key 无权调用 Qwen-Image-2.0 图片修复模型，请在百炼开通对应模型。"
+        return "图片修复服务暂时不可用，请联系客服。"
     if "arrearage" in text:
-        return "阿里云账户欠费，请到百炼控制台充值。"
+        return "修复额度不足，请联系客服充值。"
     if "throttling" in text or "ratelimit" in text or "rate limit" in text:
-        return "接口被限流，稍后会自动重试。"
+        return "请求太频繁，稍后会自动重试。"
     if "datainspection" in text or "inappropriate" in text or "green" in text:
         return "图片未通过内容审核，已跳过。"
-    return f"{code}：{message}"[:200]
+    return "图片修复失败，请稍后重试。"
 
 
 def _ds_request(url: str, api_key: str, payload: dict | None = None,
@@ -295,7 +297,7 @@ def _ds_request(url: str, api_key: str, payload: dict | None = None,
         except Exception:
             code, message = exc.code, body[:200]
         if exc.code == 401:
-            raise DashScopeError("API Key 无效，请检查填写的 DashScope Key。")
+            raise DashScopeError("图片修复服务连接失败，请联系客服。")
         raise DashScopeError(friendly_dashscope_error(str(code), str(message)))
     except urllib.error.URLError as exc:
         raise DashScopeError(f"网络请求失败：{exc.reason}")
@@ -353,7 +355,7 @@ def ds_upload_image(api_key: str, path: Path) -> str:
         with urllib.request.urlopen(request, timeout=180):
             pass
     except urllib.error.HTTPError as exc:
-        raise DashScopeError(f"图片上传失败：HTTP {exc.code}")
+        raise DashScopeError("图片上传失败，请稍后重试。")
     except urllib.error.URLError as exc:
         raise DashScopeError(f"图片上传失败：{exc.reason}")
     return f"oss://{key}"
@@ -546,7 +548,7 @@ def ds_qwen_repair_url(api_key: str, path: Path, stop_event: threading.Event) ->
         for part in content:
             if isinstance(part, dict) and part.get("image"):
                 return str(part["image"])
-    raise DashScopeError("Qwen-Image-2.0 修复成功但没有返回结果图。")
+    raise DashScopeError("图片修复成功但没有返回结果，请重试。")
 
 
 def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
@@ -888,7 +890,7 @@ class WatermarkWindow(tk.Toplevel):
 
         ttk.Label(
             self,
-            text="批量去除图片水印（阿里云百炼 AI，按张计费）。请只处理你自己拥有或已获授权的图片。",
+            text="批量去除图片水印（按张计费）。请只处理你自己拥有或已获授权的图片。",
             style="Hint.TLabel",
             wraplength=640,
         ).grid(row=0, column=0, sticky="w", pady=(12, 8), **pad)
@@ -896,7 +898,7 @@ class WatermarkWindow(tk.Toplevel):
         key_row = ttk.Frame(self)
         key_row.grid(row=1, column=0, sticky="ew", **pad)
         key_row.columnconfigure(1, weight=1)
-        ttk.Label(key_row, text="API Key").grid(row=0, column=0, padx=(0, 8))
+        ttk.Label(key_row, text="密钥").grid(row=0, column=0, padx=(0, 8))
         self.key_entry = ttk.Entry(key_row, textvariable=self.api_key_var, show="*")
         self.key_entry.grid(row=0, column=1, sticky="ew")
         ttk.Checkbutton(
@@ -904,7 +906,7 @@ class WatermarkWindow(tk.Toplevel):
         ).grid(row=0, column=2, padx=(8, 0))
         ttk.Label(
             key_row,
-            text="和网站后台同一个 DASHSCOPE_API_KEY（阿里云百炼控制台获取），保存在本机配置文件。",
+            text="密钥请联系客服获取，仅保存在本机，不会上传。",
             style="Hint.TLabel",
             wraplength=640,
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -1032,7 +1034,7 @@ class WatermarkWindow(tk.Toplevel):
             return
         api_key = self.api_key_var.get().strip()
         if not api_key:
-            messagebox.showwarning(APP_NAME, "请先填写 DashScope API Key。", parent=self)
+            messagebox.showwarning(APP_NAME, "请先填写密钥。", parent=self)
             return
         if not self.tasks:
             messagebox.showwarning(APP_NAME, "请先选择要处理的文件夹或图片。", parent=self)
@@ -1089,7 +1091,7 @@ class WatermarkWindow(tk.Toplevel):
                     break
                 except DashScopeError as exc:
                     last_error = str(exc)
-                    fatal = ("API Key" in last_error or "欠费" in last_error
+                    fatal = ("客服" in last_error
                              or "已跳过" in last_error or "已停止" in last_error)
                     if fatal or attempt == 2:
                         break
@@ -1117,7 +1119,7 @@ class WatermarkWindow(tk.Toplevel):
                 else:
                     self.failed += 1
                     self.log(f"失败：{source.name} —— {info}")
-                    if "API Key" in info or "欠费" in info:
+                    if "客服" in info:
                         self.stop_event.set()
                 self.progressbar.configure(value=self.done + self.failed)
                 self.progress_var.set(
@@ -1420,7 +1422,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
         key_row = ttk.Frame(self)
         key_row.grid(row=1, column=0, sticky="ew", **pad)
         key_row.columnconfigure(1, weight=1)
-        ttk.Label(key_row, text="API Key").grid(row=0, column=0, padx=(0, 8))
+        ttk.Label(key_row, text="密钥").grid(row=0, column=0, padx=(0, 8))
         self.key_entry = ttk.Entry(key_row, textvariable=self.api_key_var, show="*")
         self.key_entry.grid(row=0, column=1, sticky="ew")
         ttk.Checkbutton(
@@ -1591,7 +1593,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
         try:
             from PIL import ImageGrab
         except Exception:
-            messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图（缺少 ImageGrab）。", parent=self)
+            messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图。", parent=self)
             self._after_grab(restore_windows)
             return
         try:
@@ -1689,7 +1691,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
             return
         api_key = self.api_key_var.get().strip()
         if not api_key:
-            messagebox.showwarning(APP_NAME, "请先填写 DashScope API Key。", parent=self)
+            messagebox.showwarning(APP_NAME, "请先填写密钥。", parent=self)
             return
         if not self.captures:
             messagebox.showwarning(APP_NAME, "还没有截图，请先截图。", parent=self)
@@ -1748,7 +1750,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
                     item["has"] = None
                     item["note"] = ""
                     self.log(f"检测失败：{item['path'].name} —— {error}")
-                    if error and ("API Key" in error or "欠费" in error):
+                    if error and "客服" in error:
                         fatal = True
                         self.stop_event.set()
                 else:
@@ -1766,7 +1768,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
         self.busy = False
         self.set_running_ui(False)
         if fatal:
-            messagebox.showerror(APP_NAME, "API Key 无效或账户欠费，检测已停止。", parent=self)
+            messagebox.showerror(APP_NAME, "修复服务连接失败或额度不足，检测已停止，请联系客服。", parent=self)
             return
         marked = sum(1 for item in self.captures if item["detected"] and item["has"])
         self.log(f"检测完成：发现 {marked} 张含水印。")
@@ -1906,7 +1908,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
                     break
                 except DashScopeError as exc:
                     last_error = str(exc)
-                    if any(k in last_error for k in ("API Key", "欠费", "已跳过", "已停止")) or attempt == 2:
+                    if any(k in last_error for k in ("客服", "已跳过", "已停止")) or attempt == 2:
                         break
                     self.stop_event.wait(2)
                 except Exception as exc:
@@ -1929,7 +1931,7 @@ class ScreenshotWatermarkWindow(tk.Toplevel):
                 else:
                     self.failed += 1
                     self.log(f"失败：{source.name} —— {info}")
-                    if "API Key" in info or "欠费" in info:
+                    if "客服" in info:
                         self.stop_event.set()
                 self.progressbar.configure(value=self.done + self.failed)
                 self.progress_var.set(

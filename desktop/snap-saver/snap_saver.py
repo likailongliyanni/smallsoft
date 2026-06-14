@@ -314,25 +314,28 @@ def is_fatal_ai_error(message: str) -> bool:
         "登记",
         "额度不足",
         "欠费",
+        "客服",
         "401",
         "403",
     )
     return any(term.lower() in text for term in fatal_terms)
 
 
+# 致命错误（连接失败/服务不可用/额度不足）文案统一含「客服」，
+# is_fatal_ai_error 的 fatal_terms 含「客服」据此判断停止——改文案须保留该词。
 def friendly_dashscope_error(code: str, message: str) -> str:
     text = f"{code} {message}".lower()
     if "invalidapikey" in text or "invalid_api_key" in text or "incorrect api key" in text:
-        return "API Key 无效，请检查填写的 DashScope Key。"
+        return "图片修复服务连接失败，请联系客服。"
     if "access_denied" in text or "access denied" in text:
-        return "阿里云模型权限不足：当前 Key 无权调用图片检测/修复模型，请在百炼开通对应模型或更换已开通的模型。"
+        return "图片修复服务暂时不可用，请联系客服。"
     if "arrearage" in text:
-        return "阿里云账户欠费，请到百炼控制台充值。"
+        return "修复额度不足，请联系客服充值。"
     if "throttling" in text or "ratelimit" in text or "rate limit" in text:
-        return "接口被限流，稍后会自动重试。"
+        return "请求太频繁，稍后会自动重试。"
     if "datainspection" in text or "inappropriate" in text or "green" in text:
         return "图片未通过内容审核，已跳过。"
-    return f"{code}：{message}"[:200]
+    return "图片修复失败，请稍后重试。"
 
 
 def _ds_request(url: str, api_key: str, payload: dict | None = None,
@@ -356,7 +359,7 @@ def _ds_request(url: str, api_key: str, payload: dict | None = None,
         except Exception:
             code, message = exc.code, body[:200]
         if exc.code == 401:
-            raise DashScopeError("API Key 无效，请检查填写的 DashScope Key。")
+            raise DashScopeError("图片修复服务连接失败，请联系客服。")
         raise DashScopeError(friendly_dashscope_error(str(code), str(message)))
     except urllib.error.URLError as exc:
         raise DashScopeError(f"网络请求失败：{exc.reason}")
@@ -559,9 +562,9 @@ def ds_upload_image(api_key: str, path: Path) -> str:
         with urllib.request.urlopen(request, timeout=180):
             pass
     except urllib.error.HTTPError as exc:
-        raise DashScopeError(f"图片上传失败：HTTP {exc.code}")
+        raise DashScopeError("图片上传失败，请稍后重试。")
     except urllib.error.URLError as exc:
-        raise DashScopeError(f"图片上传失败：{exc.reason}")
+        raise DashScopeError("图片上传失败，请检查网络后重试。")
     return f"oss://{key}"
 
 
@@ -719,7 +722,7 @@ def ds_qwen_repair_url(api_key: str, path: Path, stop_event: threading.Event) ->
         for part in content:
             if isinstance(part, dict) and part.get("image"):
                 return str(part["image"])
-    raise DashScopeError("Qwen-Image-2.0 修复成功但没有返回结果图。")
+    raise DashScopeError("图片修复成功但没有返回结果，请重试。")
 
 
 def prepare_watermark_input(path: Path, temp_dir: Path) -> Path:
@@ -855,7 +858,7 @@ class CtrlDragHook:
         self.thread = threading.Thread(target=self._thread_main, name="ctrl-drag-hook", daemon=True)
         self.thread.start()
         if not self.ready.wait(2.0):
-            self.last_error = "钩子线程启动超时"
+            self.last_error = "截图功能启动超时，请重试或重启软件"
             self.stop_requested = True
             if self.thread_id:
                 self.user32.PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0)
@@ -1891,8 +1894,8 @@ class SnapSaverApp:
         else:
             self.hook_state_var.set("● Ctrl 拖动截图：启用失败")
             self.log(f"Ctrl 拖动启用失败：{self.hook.last_error or '可能被安全软件拦截'}。")
-            messagebox.showwarning(APP_NAME, "全局截图钩子启用失败，可能被安全软件拦截。\n"
-                                             "请允许本程序的鼠标钩子后重试。", parent=self.root)
+            messagebox.showwarning(APP_NAME, "截图功能启用失败，可能被安全软件拦截。\n"
+                                             "请在安全软件里允许本程序后重试。", parent=self.root)
             self.work_mode = False
             self.start_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
@@ -2018,7 +2021,7 @@ class SnapSaverApp:
         try:
             from PIL import ImageGrab
         except Exception:
-            messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图（缺少 ImageGrab）。", parent=self.root)
+            messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图。", parent=self.root)
             self.grabbing = False
             self.hook.enabled = True
             return
