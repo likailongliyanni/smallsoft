@@ -168,7 +168,8 @@ class WatermarkAiService
 
     private function apiKey(): string
     {
-        $key = trim((string) env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')));
+        // 走 config 而非 env()：config:cache 生效后 .env 不再加载，env() 会拿到空。
+        $key = trim((string) config('ai.dashscope_api_key', ''));
         if ($key === '') {
             throw new RuntimeException('服务器未配置 DASHSCOPE_API_KEY。');
         }

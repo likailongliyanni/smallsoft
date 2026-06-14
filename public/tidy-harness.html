@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据清洗本地测试台</title>
+<link rel="stylesheet" href="/assets/styles.css">
+<style>
+body { padding: 20px; background: #f8fafc; font-family: "Microsoft YaHei", sans-serif; }
+.harness-note { color: #64748b; font-size: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<p class="harness-note">本地测试台：与正式页同一套面板和真实 JS（table-tidy-local.js / table-tidy-ui.js），未登录走本地规则路径，文件不上传服务器。</p>
+
+<div id="tableTidyPanel" class="excel-work-area">
+    <main class="excel-main">
+        <div class="excel-page-head">
+            <div>
+                <h1>数据清洗（测试台）</h1>
+                <p>任意乱表智能结构化：自动识别表头和数据区，删掉合计、页脚等噪声行，标准化后输出干净表。</p>
+            </div>
+            <label class="excel-upload-btn">
+                <input id="tidyFiles" type="file" accept=".xlsx" multiple>
+                选择乱表
+            </label>
+        </div>
+
+        <div class="excel-file-row">
+            <div id="tidyFileList" class="merge-file-list">
+                <p class="merge-file-empty">还没有选择文件。可多选，支持多个 sheet。</p>
+            </div>
+            <div id="tidyResultMeta" class="excel-meta">等待处理</div>
+        </div>
+
+        <div id="tidyPlanSection" class="merge-mapping hidden">
+            <div class="merge-mapping-head">
+                <h2>整理计划确认</h2>
+                <p>核对推断出的目标字段：可改字段名、类型，或移除不需要的字段。</p>
+            </div>
+            <div id="tidyPlanBody"></div>
+        </div>
+
+        <div id="tidyResultSection" class="merge-preview hidden">
+            <h2>整理结果</h2>
+            <div id="tidyResultBody"></div>
+        </div>
+    </main>
+
+    <aside class="excel-settings">
+        <div class="excel-setting-section">
+            <h3>整理要求（可选）</h3>
+            <textarea id="tidyInstruction" rows="4"></textarea>
+        </div>
+        <div class="excel-setting-section">
+            <h3>整理选项</h3>
+            <label class="excel-checkbox">
+                <input id="tidyDedupeOpt" type="checkbox">
+                <span>去除完全重复的行</span>
+            </label>
+        </div>
+        <div id="tidyWarnings" class="tool-warnings hidden"></div>
+        <p id="tidyStatus" class="excel-status"></p>
+        <button id="tidyPlanBtn" class="excel-primary-action" type="button">AI 规划整理</button>
+        <button id="tidyRunBtn" class="excel-secondary-action" type="button">开始整理</button>
+        <button id="tidyDownloadBtn" class="excel-secondary-action hidden" type="button">下载整理结果.xlsx</button>
+        <button id="tidyClearBtn" class="excel-secondary-action" type="button">清空</button>
+    </aside>
+</div>
+
+<script>
+// 模拟正式页的 ?v=time() 防缓存
+document.write('<scr' + 'ipt src="/assets/excel-automation-local.js?v=' + Date.now() + '"></scr' + 'ipt>');
+document.write('<scr' + 'ipt src="/assets/table-tidy-local.js?v=' + Date.now() + '"></scr' + 'ipt>');
+document.write('<scr' + 'ipt src="/assets/table-tidy-ui.js?v=' + Date.now() + '"></scr' + 'ipt>');
+</script>
+<script>
+window.initTableTidyLocal({
+    userApi: async () => { throw new Error('测试台无后端'); },
+    escapeHtml: text => String(text ?? '')
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#39;'),
+    userTokenKey: 'harness_token_unused',
+});
+</script>
+</body>
+</html>

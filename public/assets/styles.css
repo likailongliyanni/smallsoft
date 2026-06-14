@@ -2845,3 +2845,44 @@ table .empty { text-align: center; color: #94a3b8; padding: 30px !important; fon
 body[data-page="excel-automation"] .site-footer {
     display: none;
 }
+
+/* ---------- 数据清洗（通用乱表整理） ---------- */
+
+.tidy-plan-block,
+.tidy-result-block {
+    margin-bottom: 18px;
+}
+
+.tidy-plan-block h3,
+.tidy-result-block h3 {
+    font-size: 15px;
+    margin: 12px 0 6px;
+    color: #0f172a;
+}
+
+.tidy-plan-block h3 small {
+    font-size: 12px;
+    font-weight: 400;
+    color: #64748b;
+}
+
+.tidy-plan-block input {
+    width: 140px;
+    padding: 3px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.tidy-plan-block select {
+    padding: 3px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.tidy-result-block h4 {
+    font-size: 13px;
+    margin: 14px 0 6px;
+    color: #b45309;
+}

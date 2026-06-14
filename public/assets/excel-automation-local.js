@@ -388,6 +388,7 @@
                 rows: rowsInfo.rows,
                 maxRow: rowsInfo.maxRow,
                 maxCol: rowsInfo.maxCol,
+                merges: rowsInfo.merges || [],
                 images,
                 headerRow,
                 headers,
@@ -957,7 +958,26 @@
             rows.set(rowNumber, cells);
         });
 
-        return {rows, maxRow, maxCol};
+        const merges = nodes(dom, 'mergeCell')
+            .map(node => parseRange(node.getAttribute('ref')))
+            .filter(Boolean);
+
+        return {rows, maxRow, maxCol, merges};
+    }
+
+    // "A1:T1" -> {top,bottom,left,right}（1 基行列号）。非法返回 null。
+    function parseRange(ref) {
+        const parts = String(ref || '').split(':');
+        if (parts.length !== 2) return null;
+        const c1 = columnNumber(parts[0]);
+        const c2 = columnNumber(parts[1]);
+        const r1 = Number((parts[0].match(/\d+/) || [])[0]);
+        const r2 = Number((parts[1].match(/\d+/) || [])[0]);
+        if (!c1 || !c2 || !r1 || !r2) return null;
+        return {
+            top: Math.min(r1, r2), bottom: Math.max(r1, r2),
+            left: Math.min(c1, c2), right: Math.max(c1, c2),
+        };
     }
 
     async function readSheetImages(zip, sheetPath) {

@@ -37,11 +37,14 @@
                     <span class="excel-nav-icon">⊞</span>
                     表格整理
                 </button>
+                <button class="excel-nav-item" type="button" data-panel="table-tidy">
+                    <span class="excel-nav-icon">▥</span>
+                    数据清洗
+                </button>
             </div>
 
             <div class="excel-nav-block">
                 <span class="excel-nav-title">即将上线</span>
-                <button class="excel-nav-item disabled" type="button" disabled>数据清洗</button>
                 <button class="excel-nav-item disabled" type="button" disabled>智能分类</button>
                 <button class="excel-nav-item disabled" type="button" disabled>批量翻译</button>
             </div>
@@ -295,9 +298,95 @@
                 </div>
             </aside>
         </div>
+
+        <div id="tableTidyPanel" class="excel-work-area hidden">
+            <main class="excel-main">
+                <div class="excel-page-head">
+                    <div>
+                        <h1>数据清洗</h1>
+                        <p>任意乱表智能结构化：自动识别表头和数据区，删掉合计、页脚等噪声行，标准化后输出干净表。</p>
+                    </div>
+                    <label class="excel-upload-btn">
+                        <input id="tidyFiles" type="file" accept=".xlsx" multiple>
+                        选择乱表
+                    </label>
+                </div>
+
+                <details class="excel-help" data-help>
+                    <summary>使用说明</summary>
+                    <ol>
+                        <li>选择一个或多个乱表 .xlsx（支持多 sheet），文件只在浏览器本地读取，<strong>不会上传服务器</strong>。</li>
+                        <li>（可选）用自己的话写整理要求，例如：<em>帮我整理成规范表，合计和备注都不要；日期统一成 2026-01-01 这种</em>。</li>
+                        <li>点「AI 规划整理」：AI 根据表头和内容形态推断目标字段、判断哪些行是噪声（只发送表头与统计摘要，不发送整表数据）；未登录走本地规则。</li>
+                        <li>在「整理计划确认」里核对字段名和类型，可改名、改类型或删除不需要的字段。</li>
+                        <li>点「开始整理」查看结果：干净表 / 异常待确认 / 被删噪声行；确认后下载 xlsx（内含字段映射和处理日志）。</li>
+                    </ol>
+                    <p>提示：合计、小计、重复表头、制表人页脚会被自动识别；拿不准的行不会硬猜，会单独放进「异常待确认」并标注置信度和来源行号。</p>
+                </details>
+
+                <div class="excel-file-row">
+                    <div id="tidyFileList" class="merge-file-list">
+                        <p class="merge-file-empty">还没有选择文件。可多选，支持多个 sheet。</p>
+                    </div>
+                    <div id="tidyResultMeta" class="excel-meta">等待处理</div>
+                </div>
+
+                <div id="tidyPlanSection" class="merge-mapping hidden">
+                    <div class="merge-mapping-head">
+                        <h2>整理计划确认</h2>
+                        <p>核对推断出的目标字段：可改字段名、类型，或移除不需要的字段。改类型会自动换对应的清洗方式。</p>
+                    </div>
+                    <div id="tidyPlanBody"></div>
+                </div>
+
+                <div id="tidyResultSection" class="merge-preview hidden">
+                    <h2>整理结果</h2>
+                    <div id="tidyResultBody"></div>
+                </div>
+            </main>
+
+            <aside class="excel-settings">
+                <div class="excel-settings-head">
+                    <span class="excel-setting-icon">▥</span>
+                    <div>
+                        <h2>数据清洗设置</h2>
+                        <p>文件只在浏览器本地读取，不上传服务器</p>
+                    </div>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>整理要求（可选）</h3>
+                    <textarea id="tidyInstruction" rows="6" placeholder="例如：帮我整理成规范表，合计、备注、页脚都不要；日期统一成 2026-01-01；金额去掉￥和千分位。"></textarea>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>整理选项</h3>
+                    <label class="excel-checkbox">
+                        <input id="tidyDedupeOpt" type="checkbox">
+                        <span>去除完全重复的行</span>
+                    </label>
+                </div>
+
+                <div id="tidyWarnings" class="tool-warnings hidden"></div>
+
+                <p id="tidyStatus" class="excel-status"></p>
+
+                <button id="tidyPlanBtn" class="excel-primary-action" type="button">AI 规划整理</button>
+                <button id="tidyRunBtn" class="excel-secondary-action" type="button">开始整理</button>
+                <button id="tidyDownloadBtn" class="excel-secondary-action hidden" type="button">下载整理结果.xlsx</button>
+                <button id="tidyClearBtn" class="excel-secondary-action" type="button">清空</button>
+
+                <div class="excel-tip">
+                    <strong>小贴士</strong>
+                    <p>同一个 sheet 里有多段表格（各自有表头）也能识别，会把各段统一映射到同一套目标字段；「同上 / 〃」会自动回填上一行的值。</p>
+                </div>
+            </aside>
+        </div>
     </div>
 </section>
 
 <script src="/assets/excel-automation-local.js?v={{ time() }}"></script>
 <script src="/assets/table-merge-local.js?v={{ time() }}"></script>
+<script src="/assets/table-tidy-local.js?v={{ time() }}"></script>
+<script src="/assets/table-tidy-ui.js?v={{ time() }}"></script>
 @endsection

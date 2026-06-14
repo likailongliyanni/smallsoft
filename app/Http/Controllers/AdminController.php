@@ -300,7 +300,7 @@ class AdminController extends Controller
         return $this->ok([
             'result' => $result,
             'models' => $aliyun->listModels(),
-            'has_env_key' => trim((string) env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', ''))) !== '',
+            'has_env_key' => trim((string) config('ai.dashscope_api_key', '')) !== '',
         ]);
     }
 

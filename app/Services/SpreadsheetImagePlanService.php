@@ -267,7 +267,8 @@ PROMPT;
      */
     private function activeModelConfig(): ?ModelConfig
     {
-        $apiKey = trim((string) env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')));
+        // 走 config 而非 env()：config:cache 生效后 .env 不再加载，env() 会拿到空。
+        $apiKey = trim((string) config('ai.dashscope_api_key', ''));
         if ($apiKey !== '') {
             $spec = AliyunAiService::MODELS[AliyunAiService::DEFAULT_KEY];
             $config = new ModelConfig();

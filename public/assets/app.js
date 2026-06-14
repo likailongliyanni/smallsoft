@@ -1056,6 +1056,13 @@ function initSpreadsheetImages() {
                 userTokenKey,
             });
         }
+        if (typeof window.initTableTidyLocal === 'function') {
+            window.initTableTidyLocal({
+                userApi,
+                escapeHtml,
+                userTokenKey,
+            });
+        }
         return;
     }
 

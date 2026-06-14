@@ -349,7 +349,8 @@ class AliyunAiService
 
     private function apiKey(): string
     {
-        return trim((string) env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')));
+        // 走 config 而非 env()：config:cache 生效后 .env 不再加载，env() 会拿到空。
+        return trim((string) config('ai.dashscope_api_key', ''));
     }
 
     private function consumeQuota(User $user, GenerationJob $job): void

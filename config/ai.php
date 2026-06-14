@@ -51,4 +51,8 @@ return [
     'temperature' => (float) env('AI_TEMPERATURE', 0.2),
     'max_tokens' => (int) env('AI_MAX_TOKENS', 8192),
     'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 180),
+
+    // 通过 config 读取，保证 `php artisan config:cache` 之后服务里仍能拿到 Key
+    // （配置缓存生效时 .env 不再加载，运行时 env() 一律返回 null）。
+    'dashscope_api_key' => env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')),
 ];

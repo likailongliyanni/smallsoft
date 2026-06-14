@@ -17,6 +17,7 @@ use App\Http\Controllers\PatternsPublicController;
 use App\Http\Controllers\RulesController;
 use App\Http\Controllers\SpreadsheetImageController;
 use App\Http\Controllers\TableMergeController;
+use App\Http\Controllers\TableTidyController;
 use App\Http\Controllers\TrainingController;
 use App\Http\Controllers\UserProfileController;
 use Illuminate\Support\Facades\Route;
@@ -39,6 +40,7 @@ Route::post('/desktop/watermark/detect', [DesktopWatermarkController::class, 'de
 Route::post('/desktop/watermark/remove', [DesktopWatermarkController::class, 'remove']);
 Route::post('/excel-automation/image-extract/plan', [SpreadsheetImageController::class, 'plan']);
 Route::post('/excel-automation/table-merge/plan', [TableMergeController::class, 'plan']);
+Route::post('/excel-automation/table-tidy/plan', [TableTidyController::class, 'plan']);
 Route::post('/feedback', [FeedbackController::class, 'store']);
 Route::get('/orders/mine', [OrderController::class, 'mine']);
 

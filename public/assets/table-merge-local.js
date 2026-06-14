@@ -1010,6 +1010,7 @@
             const panels = {
                 'image-extract': document.querySelector('#sheetExportForm'),
                 'table-merge': panel,
+                'table-tidy': document.querySelector('#tableTidyPanel'),
             };
             navItems.forEach(item => {
                 item.addEventListener('click', () => {
