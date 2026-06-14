@@ -15,10 +15,12 @@
 import base64
 import csv
 import ctypes
+import hashlib
 import io
 import json
 import mimetypes
 import os
+import platform
 import queue
 import re
 import shutil
@@ -409,9 +411,15 @@ def _server_error_from_body(body: str, fallback: str) -> str:
 
 
 def local_software_id() -> str:
-    node = uuid.getnode()
-    hex_value = f"{node:012X}"[-12:]
-    return "-".join(hex_value[index:index + 2] for index in range(0, 12, 2))
+    # 软件编号：MAC + 主机名 + CPU + 系统 + 软件名 做 SHA256，取前 5 段。
+    # - 哈希不可逆，不直接暴露用户 MAC；
+    # - 末尾加软件名「snap-saver」，使同一台机器上本软件的编号与自动化软件不同，
+    #   充值时服务器/客服能区分是给哪个软件充。改这里的软件名会改变编号，勿动。
+    mac = uuid.getnode()
+    raw = f"{mac}-{platform.node()}-{platform.processor()}-{platform.system()}-snap-saver"
+    digest = hashlib.sha256(raw.encode()).hexdigest().upper()
+    parts = [digest[i:i + 4] for i in range(0, 20, 4)]
+    return "-".join(parts)
 
 
 def server_register_device(server_url: str, software_id: str) -> dict:
