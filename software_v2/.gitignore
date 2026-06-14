@@ -1,0 +1,20 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 打包产物 / 构建缓存（体积巨大，不入库）
+build/
+dist/
+dist_nuitka/
+*.build/
+*.dist/
+*.onefile-build/
+
+# 录制的流程数据（含用户录制时填写的原始值，可能涉隐私）
+flows/
+
+# 构建日志 / 杂项空文件
+*.log
+_build_out.txt
+build_log.txt
+/python

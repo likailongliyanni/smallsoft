@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>采集引擎测试页</title>
+</head>
+<body>
+<h1>模拟电商列表（卡片结构，混框架 class）</h1>
+<div class="el-row product-list">
+    <div class="el-card product-card" data-id="1">
+        <a class="title" href="/p/1001">十月稻田五常大米5kg</a>
+        <span class="price">¥48.00</span>
+        <span class="sales">已售1200</span>
+        <img class="thumb" src="/img/rice.jpg" alt="">
+    </div>
+    <div class="el-card product-card" data-id="2">
+        <a class="title" href="/p/1002">鲁花花生油5L</a>
+        <span class="price">¥76.50</span>
+        <span class="sales">已售860</span>
+        <img class="thumb" src="/img/oil.jpg" alt="">
+    </div>
+    <div class="el-card product-card" data-id="3">
+        <a class="title" href="/p/1003">维达抽纸24包</a>
+        <span class="price">¥56.00</span>
+        <span class="sales">已售430</span>
+        <img class="thumb" src="/img/paper.jpg" alt="">
+    </div>
+</div>
+
+<h1>模拟订单表格（table 结构，有表头）</h1>
+<table class="order-table">
+    <thead>
+        <tr><th>订单号</th><th>收货人</th><th>电话</th><th>金额</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>O20260601</td><td>张三</td><td>13800138000</td><td>¥120.00</td></tr>
+        <tr><td>O20260602</td><td>李四</td><td>13900139000</td><td>¥340.50</td></tr>
+        <tr><td>O20260603</td><td>王五</td><td>13700137000</td><td>¥56.00</td></tr>
+    </tbody>
+</table>
+
+<script src="app/collector.js"></script>
+</body>
+</html>
