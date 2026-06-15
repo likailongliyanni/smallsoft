@@ -31,7 +31,7 @@
             <a class="btn btn-outline" href="#snap-workflow">查看流程</a>
         </div>
         <div class="snap-download-line">
-            下载地址：<code>{{ $snapDownloadUrl }}</code>
+            下载地址：<code>{{ rawurldecode($snapDownloadUrl) }}</code>
         </div>
     </div>
     <div class="snap-hero-media">

@@ -2,11 +2,11 @@
 
 
 a = Analysis(
-    ['E:\\SaaS\\project002\\desktop\\snap-saver\\snap_saver.py'],
+    ['snap_saver.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['openpyxl'],
+    hiddenimports=['openpyxl', 'PIL.ImageTk', 'PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
