@@ -5,7 +5,7 @@
 2. 在网页里按住 Ctrl + 鼠标左键拖框选区 → 松开自动截图保存到 输出/名称/主图(或详情)/
 3. 设定主图、详情张数：主图截够自动切详情，详情截够自动切下一行并打开下一个链接
 4. 全部截完选择修复类型并点「AI 智能修复」：弹出缩略图窗口，人工勾选要处理的图片
-5. 无需账号注册，软件自动读取本机 MAC 作为软件编号；新编号默认 50 张图片处理额度
+5. 无需账号注册，软件自动读取本机 MAC 作为软件编号；新编号默认 10 张图片处理额度
 6. 确认后按成功处理张数扣减额度，结果覆盖原图，原图备份
 
 依赖：Pillow、openpyxl（可选，读 xlsx 用）。图片修复走服务器接口，
@@ -944,13 +944,17 @@ class CtrlDragHook:
 
 
 class SelectionBoxWindow(tk.Toplevel):
-    """Ctrl 拖动时的全屏选框反馈窗口，坐标用屏幕物理坐标。"""
+    """Ctrl 拖动时的全屏选框反馈窗口，坐标用屏幕物理坐标。
+
+    按下取图键的瞬间会把整屏「冻结」成一张静态图铺在最上层：
+    拖动选框时鼠标落在冻结图上，网页收不到鼠标移动，就不会再触发
+    悬停放大镜/红框等浮层，避免把它们截进去。
+    """
 
     def __init__(self, root):
         super().__init__(root)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.25)
         self.configure(bg="#0b0f14", cursor="crosshair")
         width = self.winfo_screenwidth()
         height = self.winfo_screenheight()
@@ -958,13 +962,22 @@ class SelectionBoxWindow(tk.Toplevel):
         self.canvas = tk.Canvas(self, bg="#0b0f14", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.rect = None
+        self.frozen_photo = None
         self.start = (0, 0)
         self.visible = False
         self.withdraw()
 
-    def begin(self, x, y):
+    def begin(self, x, y, frozen_photo=None):
         self.start = (x, y)
         self.canvas.delete("all")
+        self.frozen_photo = frozen_photo
+        if frozen_photo is not None:
+            # 冻结整屏：铺满静态截图，完全不透明（看到什么就截到什么）
+            self.attributes("-alpha", 1.0)
+            self.canvas.create_image(0, 0, anchor="nw", image=frozen_photo)
+        else:
+            # 没拿到冻结图时退回半透明遮罩
+            self.attributes("-alpha", 0.25)
         self.rect = self.canvas.create_rectangle(x, y, x, y, outline=COLOR_CYAN, width=2, dash=(6, 3))
         self.deiconify()
         self.lift()
@@ -977,6 +990,9 @@ class SelectionBoxWindow(tk.Toplevel):
 
     def end(self):
         self.visible = False
+        self.canvas.delete("all")
+        self.rect = None
+        self.frozen_photo = None
         self.withdraw()
 
 
@@ -1378,6 +1394,207 @@ class ManualRepairDialog(tk.Toplevel):
         self.destroy()
 
 
+# ---------------- 结果核对（原图/修改后对比）对话框 ----------------
+
+class ResultReviewDialog(tk.Toplevel):
+    """修复完成后弹出：原图 → 修改后 并排滚动核对，勾选不满意的一键二次修复。"""
+
+    def __init__(self, owner, results: list, mode_label: str):
+        super().__init__(owner.root)
+        self.owner = owner
+        self.mode_label = mode_label
+        self.title("结果核对")
+        self.geometry("1040x720")
+        self.minsize(820, 560)
+        self.transient(owner.root)
+        self.action = "done"          # "done" 或 "rerun"
+        self.selected: list = []       # 需要二次修复的 after 路径（Path）
+        self.items = []
+        self.photos = []
+
+        for record in results:
+            self.items.append({
+                "before": Path(record["before"]) if record.get("before") else None,
+                "after": Path(record["after"]),
+                "name": str(record.get("name") or ""),
+                "round": int(record.get("round", 1)),
+                "var": tk.BooleanVar(value=False),
+            })
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            self,
+            text=f"已完成「{mode_label}」{len(self.items)} 张。左为原图、右为修改后；"
+                 f"勾选不满意的，点「二次修复」会再处理一次（每张再扣 1 张额度）。",
+            style="Hint.TLabel",
+            wraplength=980,
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
+
+        holder = ttk.Frame(self)
+        holder.grid(row=1, column=0, sticky="nsew", padx=16)
+        holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(holder, bg=COLOR_BG, highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(holder, orient="vertical", command=self.canvas.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=scroll.set)
+
+        self.grid_frame = ttk.Frame(self.canvas)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.grid_frame, anchor="nw")
+        self.grid_frame.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        bar = ttk.Frame(self)
+        bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(10, 0))
+        bar.columnconfigure(3, weight=1)
+        ttk.Button(bar, text="全选", command=self.select_all).grid(row=0, column=0)
+        ttk.Button(bar, text="全不选", command=self.clear_all).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(bar, text="打开结果", command=self.open_selected).grid(row=0, column=2, padx=(8, 0))
+        self.count_var = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.count_var, style="Hint.TLabel").grid(row=0, column=3, sticky="e")
+
+        action = ttk.Frame(self)
+        action.grid(row=3, column=0, sticky="ew", padx=16, pady=14)
+        action.columnconfigure(0, weight=1)
+        self.rerun_button = ttk.Button(action, text="二次修复选中", command=self._rerun)
+        self.rerun_button.grid(row=0, column=1)
+        ttk.Button(action, text="完成", style="Accent.TButton", command=self._done).grid(
+            row=0, column=2, padx=(8, 0))
+
+        self.protocol("WM_DELETE_WINDOW", self._done)
+        self.render_items()
+        self.update_count()
+
+    def render_items(self):
+        columns = 3
+        for col in range(columns):
+            self.grid_frame.columnconfigure(col, weight=1, uniform="cmp")
+
+        for index, item in enumerate(self.items):
+            row, col = divmod(index, columns)
+            card = tk.Frame(self.grid_frame, bg=COLOR_CARD, padx=8, pady=8,
+                            highlightbackground=COLOR_BORDER, highlightthickness=1)
+            card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+            card.columnconfigure(0, weight=1)
+
+            pair = tk.Frame(card, bg=COLOR_CARD)
+            pair.grid(row=0, column=0, sticky="nsew")
+            pair.columnconfigure(0, weight=1)
+            pair.columnconfigure(2, weight=1)
+
+            before_box = tk.Frame(pair, bg=COLOR_CARD)
+            before_box.grid(row=0, column=0)
+            tk.Label(before_box, text="原图", bg=COLOR_CARD, fg=COLOR_MUTED,
+                     font=("Microsoft YaHei UI", 8)).grid(row=0, column=0)
+            blabel = tk.Label(before_box, bg=COLOR_CARD)
+            blabel.grid(row=1, column=0)
+            self._set_thumbnail(blabel, item["before"], "原图缺失")
+
+            tk.Label(pair, text="→", bg=COLOR_CARD, fg=COLOR_GREEN,
+                     font=("Microsoft YaHei UI", 14, "bold")).grid(row=0, column=1, padx=4)
+
+            after_box = tk.Frame(pair, bg=COLOR_CARD)
+            after_box.grid(row=0, column=2)
+            tk.Label(after_box, text="修改后", bg=COLOR_CARD, fg=COLOR_GREEN,
+                     font=("Microsoft YaHei UI", 8, "bold")).grid(row=0, column=0)
+            alabel = tk.Label(after_box, bg=COLOR_CARD, cursor="hand2")
+            alabel.grid(row=1, column=0)
+            self._set_thumbnail(alabel, item["after"], "无法预览")
+            alabel.bind("<Double-1>", lambda _e, i=index: self.open_item(i))
+
+            round_tag = f"（已修 {item['round']} 次）" if item["round"] > 1 else ""
+            cb = ttk.Checkbutton(card, variable=item["var"], command=self.update_count,
+                                 text=f"需要二次修复{round_tag}")
+            cb.grid(row=1, column=0, sticky="w", pady=(8, 0))
+            ttk.Label(card, text=f"{item['name']} / {item['after'].name}",
+                      style="CardHint.TLabel", wraplength=280).grid(row=2, column=0, sticky="w", pady=(2, 0))
+
+    def _set_thumbnail(self, label, path, missing_text: str):
+        if not path or not Path(path).exists():
+            label.configure(text=missing_text, width=18, height=7, fg=COLOR_MUTED,
+                            justify="center", bg=COLOR_CARD)
+            return
+        try:
+            with Image.open(path) as image:
+                image.load()
+                image = ImageOps.exif_transpose(image)
+                if image.mode != "RGB":
+                    image = image.convert("RGB")
+                image.thumbnail((150, 130), Image.LANCZOS)
+                thumb = ImageTk.PhotoImage(image)
+            label.configure(image=thumb, width=150, height=130)
+            label.image = thumb
+            self.photos.append(thumb)
+        except Exception:
+            label.configure(text="无法预览", width=18, height=7, fg="#b91c1c", justify="center")
+
+    def _on_frame_configure(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+
+    def _on_mousewheel(self, event):
+        if not self.winfo_exists():
+            return
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def selected_items(self) -> list:
+        return [item for item in self.items if item["var"].get()]
+
+    def update_count(self):
+        count = len(self.selected_items())
+        self.count_var.set(f"已选 {count}/{len(self.items)} 张需二次修复；成功每张扣 1 张额度")
+
+    def select_all(self):
+        for item in self.items:
+            item["var"].set(True)
+        self.update_count()
+
+    def clear_all(self):
+        for item in self.items:
+            item["var"].set(False)
+        self.update_count()
+
+    def open_item(self, index: int):
+        try:
+            os.startfile(str(self.items[index]["after"]))
+        except Exception as exc:
+            messagebox.showinfo(APP_NAME, f"无法打开图片：{exc}", parent=self)
+
+    def open_selected(self):
+        selected = self.selected_items()
+        target = selected[0] if selected else (self.items[0] if self.items else None)
+        if not target:
+            return
+        self.open_item(self.items.index(target))
+
+    def _rerun(self):
+        selected = self.selected_items()
+        if not selected:
+            messagebox.showinfo(APP_NAME, "请先勾选需要二次修复的图片。", parent=self)
+            return
+        if not messagebox.askyesno(
+                APP_NAME,
+                f"对勾选的 {len(selected)} 张再做一次「{self.mode_label}」吗？\n\n"
+                f"会在当前结果上继续处理，成功每张再扣 1 张图片额度。", parent=self):
+            return
+        self.canvas.unbind_all("<MouseWheel>")
+        self.action = "rerun"
+        self.selected = [item["after"] for item in selected]
+        self.destroy()
+
+    def _done(self):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.action = "done"
+        self.destroy()
+
+
 # ---------------- 主程序 ----------------
 
 class SnapSaverApp:
@@ -1398,6 +1615,7 @@ class SnapSaverApp:
         self.selection_box: SelectionBoxWindow | None = None
         self.hook = CtrlDragHook()
         self.gesture_start = None
+        self.frozen_image = None
         self.grabbing = False
         self.hook_polling = False
         self.busy = False
@@ -1405,6 +1623,10 @@ class SnapSaverApp:
         self.temp_dir = None
         self.ai_thread = None
         self.ai_events: queue.Queue = queue.Queue()
+        # 「结果核对」对比窗状态
+        self.review_results: list = []      # [{name, before, after, round}]
+        self.review_mode_key = DEFAULT_REPAIR_MODE
+        self.review_mode_label = repair_mode_label(DEFAULT_REPAIR_MODE)
 
         self.server_url_var = tk.StringVar(value=str(config.get("server_url") or os.environ.get("HAOBANFA_SERVER_URL", DEFAULT_SERVER_URL)))
         self.software_id_var = tk.StringVar(value=str(config.get("software_id") or local_software_id()))
@@ -2012,8 +2234,16 @@ class SnapSaverApp:
                     if self.busy or self.grabbing:
                         continue
                     self.gesture_start = (x, y)
+                    # 在显示选框之前先把整屏冻结成静态图（不含本程序的选框窗）
+                    self.frozen_image = self._freeze_screen()
                     if self.selection_box:
-                        self.selection_box.begin(x, y)
+                        photo = None
+                        if self.frozen_image is not None:
+                            try:
+                                photo = ImageTk.PhotoImage(self.frozen_image)
+                            except Exception:
+                                photo = None
+                        self.selection_box.begin(x, y, photo)
                 elif kind == "move":
                     if self.selection_box and self.selection_box.visible:
                         self.selection_box.update_to(x, y)
@@ -2028,33 +2258,55 @@ class SnapSaverApp:
         if self.hook_polling:
             self.root.after(15, self.poll_hook)
 
+    def _freeze_screen(self):
+        try:
+            from PIL import ImageGrab
+        except Exception:
+            return None
+        try:
+            # 抓主屏物理像素，坐标与钩子坐标一致，裁剪时直接按屏幕坐标切。
+            return ImageGrab.grab()
+        except Exception as exc:
+            write_error_log(f"冻结屏幕失败：{exc}")
+            return None
+
     def _finish_gesture(self, sx, sy, ex, ey):
         left, top = min(sx, ex), min(sy, ey)
         right, bottom = max(sx, ex), max(sy, ey)
         if right - left < 5 or bottom - top < 5:
+            self.frozen_image = None
             self.log("框选区域太小，已忽略。")
             return
         self.grabbing = True
         self.hook.enabled = False
-        self.root.after(120, lambda: self._grab((int(left), int(top), int(right), int(bottom))))
-
-    def _grab(self, bbox):
         try:
-            from PIL import ImageGrab
-        except Exception:
-            messagebox.showerror(APP_NAME, "当前环境不支持屏幕截图。", parent=self.root)
+            self._crop_frozen((int(left), int(top), int(right), int(bottom)))
+        finally:
             self.grabbing = False
             self.hook.enabled = True
-            return
+
+    def _crop_frozen(self, bbox):
+        frozen = self.frozen_image
+        self.frozen_image = None
         try:
-            image = ImageGrab.grab(bbox=bbox, all_screens=True)
+            inside_frozen = False
+            if frozen is not None:
+                width, height = frozen.size
+                # 选区完整落在主屏冻结图范围内才用冻结图裁剪；否则（多屏副屏、
+                # 冻结失败）退回直接抓当前屏幕，保证多显示器下坐标正确。
+                inside_frozen = (
+                    bbox[0] >= 0 and bbox[1] >= 0
+                    and bbox[2] <= width and bbox[3] <= height
+                )
+            if inside_frozen:
+                image = frozen.crop((bbox[0], bbox[1], bbox[2], bbox[3]))
+            else:
+                from PIL import ImageGrab
+                image = ImageGrab.grab(bbox=bbox, all_screens=True)
             self.save_capture(image)
         except Exception as exc:
             self.log(f"截图失败：{exc}")
             write_error_log(f"截图失败：{exc}")
-        finally:
-            self.grabbing = False
-            self.hook.enabled = True
 
     def save_capture(self, image):
         row = self.current_row()
@@ -2282,30 +2534,45 @@ class SnapSaverApp:
         token = self.server_token
         keep_original = bool(self.keep_original_var.get())
         self.temp_dir = Path(tempfile.mkdtemp(prefix="snap_wm_"))
+        # 记录修复类型，供「结果核对」窗里的二次修复复用；重置上一轮对比结果
+        self.review_mode_key = mode_key
+        self.review_mode_label = mode_label
+        self.review_results = []
         self.set_status(f"正在{mode_label} 0/{len(targets)}...")
         self.log(f"开始{mode_label} {len(targets)} 张（{'保留原图备份' if keep_original else '直接覆盖原图'}）。")
         self.ai_events = queue.Queue()
         self.ai_thread = threading.Thread(
             target=self._remove_worker,
-            args=(server_url, token, targets, mode_key, mode_label, keep_original), daemon=True)
+            args=(server_url, token, targets, mode_key, mode_label, keep_original, True), daemon=True)
         self.ai_thread.start()
         self.root.after(200, self._poll_remove)
 
     def _remove_worker(self, server_url: str, token: str, targets: list, mode_key: str,
-                       mode_label: str, keep_original: bool):
+                       mode_label: str, keep_original: bool, cache_original: bool):
         done = 0
         failed = 0
+        results = []
         for index, path in enumerate(targets):
             if self.stop_event.is_set():
                 break
             try:
-                # keep_original=True 时先把原图备份到「_含水印原图」目录；否则直接原地覆盖
-                if keep_original:
-                    backup = path.parent / BACKUP_DIR_NAME
-                    backup.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(path, backup / path.name)
+                before_path = ""
+                if cache_original:
+                    # keep_original=True 时把原图备份到「_含水印原图」目录（持久，新旧分开）
+                    if keep_original:
+                        backup = path.parent / BACKUP_DIR_NAME
+                        backup.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(path, backup / path.name)
+                    # 无论是否保留，都先缓存一份原图到临时目录，供「结果核对」窗对比；
+                    # 临时目录在对比窗关闭后清理。
+                    orig_dir = self.temp_dir / "orig"
+                    orig_dir.mkdir(parents=True, exist_ok=True)
+                    before_path = str(orig_dir / f"{uuid.uuid4().hex}.jpg")
+                    shutil.copy2(path, before_path)
                 server_remove_watermark_to(server_url, token, path, path, self.temp_dir, mode_key, self.stop_event)
                 done += 1
+                results.append({"name": path.parent.parent.name or path.parent.name,
+                                "before": before_path, "after": str(path)})
                 self.ai_events.put(("removed", index + 1, len(targets), path.name, mode_label))
             except ServerApiError as exc:
                 failed += 1
@@ -2317,7 +2584,7 @@ class SnapSaverApp:
             except Exception as exc:
                 failed += 1
                 self.ai_events.put(("rm_error", str(exc), path.name))
-        self.ai_events.put(("remove_done", done, failed, keep_original))
+        self.ai_events.put(("remove_done", done, failed, keep_original, results))
 
     def _poll_remove(self):
         try:
@@ -2332,26 +2599,26 @@ class SnapSaverApp:
                 elif kind == "rm_fatal":
                     self.busy = False
                     self.repair_button.configure(state="normal")
-                    if self.temp_dir:
-                        shutil.rmtree(self.temp_dir, ignore_errors=True)
-                        self.temp_dir = None
+                    self._cleanup_temp_dir()
                     self.set_status(f"图片修复停止：{event[1]}")
                     messagebox.showerror(APP_NAME, f"图片修复停止：\n{event[1]}", parent=self.root)
                     return
                 elif kind == "remove_done":
-                    self._on_remove_done(event[1], event[2], event[3])
+                    self._on_remove_done(event[1], event[2], event[3], event[4])
                     return
         except queue.Empty:
             pass
         if self.busy:
             self.root.after(200, self._poll_remove)
 
-    def _on_remove_done(self, done: int, failed: int, keep_original: bool):
-        self.busy = False
-        self.repair_button.configure(state="normal")
+    def _cleanup_temp_dir(self):
         if self.temp_dir:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.temp_dir = None
+
+    def _on_remove_done(self, done: int, failed: int, keep_original: bool, results: list):
+        self.busy = False
+        self.repair_button.configure(state="normal")
         if keep_original:
             note = f"原图已备份到各「{BACKUP_DIR_NAME}」目录。"
         else:
@@ -2359,8 +2626,48 @@ class SnapSaverApp:
         self.set_status(f"图片修复完成：成功 {done} 张，失败 {failed} 张。{note}")
         self.log(f"图片修复结束：成功 {done}，失败 {failed}。")
         self.sync_quota()
-        messagebox.showinfo(APP_NAME, f"图片修复完成：成功 {done} 张，失败 {failed} 张。\n{note}",
-                            parent=self.root)
+        # 合并本轮结果：二次修复时按 after 路径匹配，保留首轮缓存的「原图」，只刷新「修改后」
+        for record in results:
+            existing = next((r for r in self.review_results if r["after"] == record["after"]), None)
+            if existing:
+                existing["round"] = existing.get("round", 1) + 1
+            else:
+                record["round"] = 1
+                self.review_results.append(record)
+        if self.review_results:
+            self._open_review()
+        else:
+            self._cleanup_temp_dir()
+            messagebox.showinfo(APP_NAME, f"图片修复完成：成功 {done} 张，失败 {failed} 张。\n{note}",
+                                parent=self.root)
+
+    def _open_review(self):
+        dialog = ResultReviewDialog(self, self.review_results, self.review_mode_label)
+        self.root.wait_window(dialog)
+        action = dialog.action
+        if action == "rerun" and dialog.selected:
+            self._review_rerun(dialog.selected)
+        else:
+            self._cleanup_temp_dir()
+            self.review_results = []
+            self.set_status("图片核对完成。")
+
+    def _review_rerun(self, targets: list):
+        server_url = normalize_server_url(self.server_url_var.get())
+        token = self.server_token
+        mode_key = self.review_mode_key
+        mode_label = self.review_mode_label
+        self.busy = True
+        self.repair_button.configure(state="disabled")
+        self.set_status(f"正在二次{mode_label} 0/{len(targets)}...")
+        self.log(f"二次{mode_label} {len(targets)} 张。")
+        self.ai_events = queue.Queue()
+        # 二次修复：复用已有临时目录，不再重新缓存原图（对比始终对照首轮真·原图）
+        self.ai_thread = threading.Thread(
+            target=self._remove_worker,
+            args=(server_url, token, targets, mode_key, mode_label, False, False), daemon=True)
+        self.ai_thread.start()
+        self.root.after(200, self._poll_remove)
 
     # ----- 关闭 -----
 

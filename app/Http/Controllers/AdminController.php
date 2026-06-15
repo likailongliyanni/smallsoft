@@ -189,6 +189,61 @@ class AdminController extends Controller
         ]);
     }
 
+    // 智能截图软件「图片修复/检测」模型——只存模型名，API Key 仍取服务器 DASHSCOPE_API_KEY。
+    // 百炼上线新模型时，管理员在后台改名即可，无需改代码/部署。
+    public function getImageModel(Request $request, TokenService $tokens): array
+    {
+        $this->requireAdmin($request, $tokens);
+
+        return $this->ok(['image_model' => $this->imageModelPayload()]);
+    }
+
+    public function saveImageModel(Request $request, TokenService $tokens): array
+    {
+        $this->requireAdmin($request, $tokens);
+
+        $data = $request->validate([
+            'repair_model' => ['required', 'string', 'max:120'],
+            'detect_model' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $this->upsertImageModel('image_repair', trim($data['repair_model']));
+        if (! empty($data['detect_model'])) {
+            $this->upsertImageModel('image_detect', trim($data['detect_model']));
+        }
+
+        return $this->ok(['image_model' => $this->imageModelPayload()]);
+    }
+
+    private function imageModelPayload(): array
+    {
+        return [
+            'repair_model' => $this->imageModelName('image_repair', (string) config('ai.image_repair.model', 'wan2.7-image')),
+            'detect_model' => $this->imageModelName('image_detect', (string) config('ai.defaults.vision.model', 'qwen3.6-plus')),
+        ];
+    }
+
+    private function imageModelName(string $purpose, string $fallback): string
+    {
+        $model = trim((string) ModelConfig::query()
+            ->where('purpose', $purpose)
+            ->where('enabled', true)
+            ->value('model'));
+
+        return $model !== '' ? $model : $fallback;
+    }
+
+    private function upsertImageModel(string $purpose, string $model): void
+    {
+        $config = ModelConfig::query()->where('purpose', $purpose)->first()
+            ?: new ModelConfig(['purpose' => $purpose]);
+        $config->purpose = $purpose;
+        $config->provider = 'aliyun';
+        $config->model = $model;
+        $config->enabled = true;
+        $config->save();
+    }
+
     public function saveModel(Request $request, TokenService $tokens): array
     {
         $this->requireAdmin($request, $tokens);

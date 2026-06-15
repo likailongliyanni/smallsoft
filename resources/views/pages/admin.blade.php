@@ -108,6 +108,25 @@
                     <pre id="aliyunResult" class="result-box"></pre>
                 </div>
 
+                {{-- 图片修复模型（智能截图软件） --}}
+                <div class="panel" style="margin-bottom:14px;border:1px solid #2563eb">
+                    <h3 style="margin:0 0 8px;color:#2563eb">🖼️ 图片修复模型（智能截图软件）</h3>
+                    <p class="muted" style="margin:0 0 12px">
+                        去水印 / 去广告 / 白底上图用的阿里云百炼模型。百炼上线新模型后，在这里改模型名即可，
+                        <b>无需改代码或重新发版</b>。API Key 同样取服务器 <code>DASHSCOPE_API_KEY</code>。
+                    </p>
+                    <form id="imageModelForm" class="form">
+                        <div class="form-grid-2">
+                            <label>修复模型<input name="repair_model" placeholder="wan2.7-image"></label>
+                            <label>检测模型<input name="detect_model" placeholder="qwen3.6-plus"></label>
+                        </div>
+                        <div class="button-row">
+                            <button class="btn" type="submit" style="background:#2563eb;color:#fff">保存图片模型</button>
+                        </div>
+                        <pre id="imageModelResult" class="result-box"></pre>
+                    </form>
+                </div>
+
                 <details>
                     <summary class="muted" style="cursor:pointer;margin:6px 0 14px">▸ 旧版模型表单（已废弃，点击展开）</summary>
 
@@ -170,6 +189,16 @@
                 </div>
 
                 <div class="panel">
+                    <div class="form-inline-quota" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px">
+                        <span class="muted">充值套餐（点一下自动填张数）：</span>
+                        @foreach (config('platform.snap_saver_packages', []) as $pkg)
+                            <button class="btn btn-sm btn-outline" type="button"
+                                data-pkg-quota="{{ $pkg['quota'] }}"
+                                data-pkg-amount="{{ number_format($pkg['amount_cents'] / 100, 2) }}">
+                                ¥{{ rtrim(rtrim(number_format($pkg['amount_cents'] / 100, 2), '0'), '.') }} / {{ $pkg['quota'] }}张
+                            </button>
+                        @endforeach
+                    </div>
                     <form id="quotaForm" class="form form-inline-quota">
                         <label>用户 ID<input name="user_id" placeholder="ID" required></label>
                         <label>调整次数<input name="quota" placeholder="正数=增加，负数=减少" required></label>

@@ -126,6 +126,24 @@ function initAdmin() {
         }
     });
 
+    // 🖼️ 图片修复模型（智能截图软件）
+    const imageModelForm = $('#imageModelForm');
+    const imageModelResult = $('#imageModelResult');
+    imageModelForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        setText(imageModelResult, '保存中...');
+        try {
+            const data = formToObject(imageModelForm);
+            const response = await api('/api/admin/image-model', { method: 'POST', body: data });
+            const m = response.image_model || {};
+            if (imageModelForm.repair_model) imageModelForm.repair_model.value = m.repair_model || '';
+            if (imageModelForm.detect_model) imageModelForm.detect_model.value = m.detect_model || '';
+            setText(imageModelResult, `已保存：修复模型=${m.repair_model || ''}，检测模型=${m.detect_model || ''}`);
+        } catch (error) {
+            setText(imageModelResult, error.message);
+        }
+    });
+
     // 🟢 阿里云全家桶测试
     const aliyunResult = $('#aliyunResult');
     const aliyunHint = $('#aliyunHint');
@@ -229,6 +247,16 @@ function initAdmin() {
         }
     });
 
+    // 充值套餐快捷按钮：点一下把张数填进「调整次数」、备注填上充值金额。
+    $$('[data-pkg-quota]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (!quotaForm) return;
+            quotaForm.querySelector('[name=quota]').value = btn.dataset.pkgQuota;
+            const noteInput = quotaForm.querySelector('[name=note]');
+            if (noteInput) noteInput.value = `充值 ¥${btn.dataset.pkgAmount} / ${btn.dataset.pkgQuota}张`;
+        });
+    });
+
     // ── 反馈筛选 ──
     $$('.fb-tab').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -258,7 +286,7 @@ function initAdmin() {
             await api('/api/admin/me');
             showAdmin(true);
             await Promise.all([
-                loadStats(), loadModel(), loadUsers(),
+                loadStats(), loadModel(), loadImageModel(), loadUsers(),
                 loadJobs(), loadOrders(), loadFeedback(),
                 loadPatterns(), loadAnnouncements()
             ]);
@@ -302,6 +330,18 @@ function initAdmin() {
             badge.classList.remove('hidden');
         } else {
             badge.classList.add('hidden');
+        }
+    }
+
+    async function loadImageModel() {
+        if (!imageModelForm) return;
+        try {
+            const response = await api('/api/admin/image-model');
+            const m = response.image_model || {};
+            if (imageModelForm.repair_model) imageModelForm.repair_model.value = m.repair_model || '';
+            if (imageModelForm.detect_model) imageModelForm.detect_model.value = m.detect_model || '';
+        } catch (error) {
+            // 后台无该接口或网络异常时静默，不影响其它面板加载。
         }
     }
 

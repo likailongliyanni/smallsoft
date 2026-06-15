@@ -63,6 +63,8 @@ Route::post('/admin/users/update', [AdminController::class, 'updateUser']);
 Route::post('/admin/quota/add', [AdminController::class, 'addQuota']);
 Route::get('/admin/model', [AdminController::class, 'getModel']);
 Route::post('/admin/model', [AdminController::class, 'saveModel']);
+Route::get('/admin/image-model', [AdminController::class, 'getImageModel']);
+Route::post('/admin/image-model', [AdminController::class, 'saveImageModel']);
 Route::post('/admin/model/test', [AdminController::class, 'testModel']);
 Route::post('/admin/model/test-vision', [AdminController::class, 'testVisionModel']);
 Route::post('/admin/aliyun/test', [AdminController::class, 'testAliyun']);

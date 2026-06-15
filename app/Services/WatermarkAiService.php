@@ -22,7 +22,7 @@ class WatermarkAiService
     private const COMPAT_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
     private const IMAGE_GENERATION_ENDPOINT = '/api/v1/services/aigc/multimodal-generation/generation';
     private const FALLBACK_DETECT_MODEL = 'qwen3.6-plus';
-    private const FALLBACK_REPAIR_MODEL = 'qwen-image-2.0';
+    private const FALLBACK_REPAIR_MODEL = 'wan2.7-image';
 
     public function detect(UploadedFile $image, string $mode = self::DEFAULT_MODE): array
     {
@@ -83,13 +83,13 @@ class WatermarkAiService
 
         $mime = $image->getMimeType() ?: 'image/jpeg';
         $dataUrl = 'data:'.$mime.';base64,'.base64_encode($imageBytes);
+        // 万相 wan2.7-image 图像编辑：parameters 仅支持 watermark / n / size，
+        // 不支持 negative_prompt、prompt_extend（防改角度/防合并的约束已写进正向 prompt）。
         $parameters = [
             'watermark' => false,
-            'negative_prompt' => '旋转商品、改变角度、改变视角、改变拍摄方向、改变朝向、改变姿态、改变透视、把正面改侧面、把侧面改正面、把多台商品合并成单台、改变商品数量、脑补商品背面或侧面、补错结构、虚假配件、改变商品结构、改变商品比例、改变支架形状、改变风扇高度、错误 logo、错误包装、新增文字、模糊、低清晰度、变形、错色、复杂背景、彩色背景、过度美颜、卡通风格',
             'n' => 1,
-            'prompt_extend' => false,
         ];
-        $size = trim((string) env('ALIYUN_IMAGE_REPAIR_SIZE', ''));
+        $size = trim((string) config('ai.image_repair.size', ''));
         if ($size !== '') {
             $parameters['size'] = $size;
         }
@@ -111,12 +111,12 @@ class WatermarkAiService
                 'parameters' => $parameters,
             ]);
 
-        $this->ensureSuccessful($response->status(), $response->body(), '创建 Qwen-Image-2.0 图片修复失败');
+        $this->ensureSuccessful($response->status(), $response->body(), '创建图片修复任务失败');
 
         $resultUrl = $this->resultImageUrl($response->json() ?: []);
         $download = Http::timeout(300)->get($resultUrl);
         if (! $download->successful()) {
-            throw new RuntimeException('下载 Qwen-Image-2.0 修复结果失败：HTTP '.$download->status());
+            throw new RuntimeException('下载图片修复结果失败：HTTP '.$download->status());
         }
 
         return $download->body();
@@ -179,14 +179,32 @@ class WatermarkAiService
 
     private function detectModel(): string
     {
-        return trim((string) config('ai.defaults.vision.model', self::FALLBACK_DETECT_MODEL))
-            ?: self::FALLBACK_DETECT_MODEL;
+        // 优先取管理员后台配置（ModelConfig purpose=image_detect），其次 config，最后兜底常量。
+        return $this->adminModel('image_detect')
+            ?: (trim((string) config('ai.defaults.vision.model', self::FALLBACK_DETECT_MODEL)) ?: self::FALLBACK_DETECT_MODEL);
     }
 
     private function repairModel(): string
     {
-        return trim((string) env('ALIYUN_IMAGE_REPAIR_MODEL', env('DASHSCOPE_IMAGE_REPAIR_MODEL', self::FALLBACK_REPAIR_MODEL)))
-            ?: self::FALLBACK_REPAIR_MODEL;
+        // 优先取管理员后台配置（ModelConfig purpose=image_repair）：百炼上新模型时
+        // 后台改个模型名即可，无需改代码/env/重新部署。其次 config，最后兜底常量。
+        return $this->adminModel('image_repair')
+            ?: (trim((string) config('ai.image_repair.model', self::FALLBACK_REPAIR_MODEL)) ?: self::FALLBACK_REPAIR_MODEL);
+    }
+
+    private function adminModel(string $purpose): string
+    {
+        try {
+            $model = \App\Models\ModelConfig::query()
+                ->where('purpose', $purpose)
+                ->where('enabled', true)
+                ->value('model');
+
+            return trim((string) $model);
+        } catch (\Throwable $e) {
+            // 表/字段缺失等异常时静默回退到 config。
+            return '';
+        }
     }
 
     private function resultImageUrl(array $payload): string
@@ -208,7 +226,7 @@ class WatermarkAiService
             }
         }
 
-        throw new RuntimeException('Qwen-Image-2.0 修复成功但没有返回结果图链接。');
+        throw new RuntimeException('图片修复成功但没有返回结果图链接。');
     }
 
     private function ensureSuccessful(int $status, string $body, string $prefix): void
@@ -230,8 +248,8 @@ class WatermarkAiService
         if (str_contains($text, 'invalidapikey') || str_contains($text, 'invalid_api_key') || str_contains($text, 'incorrect api key')) {
             return '阿里云 API Key 无效，请检查服务器 .env 的 DASHSCOPE_API_KEY。';
         }
-        if (str_contains($text, 'access_denied') || str_contains($text, 'access denied')) {
-            return '阿里云模型权限不足：当前 DASHSCOPE_API_KEY 无权调用 Qwen-Image-2.0 图片修复模型，请在百炼开通对应模型，或把 ALIYUN_IMAGE_REPAIR_MODEL 改成已开通的图像编辑模型。';
+        if (str_contains($text, 'access_denied') || str_contains($text, 'access denied') || str_contains($text, 'model not exist') || str_contains($text, 'modelnotfound')) {
+            return '阿里云模型权限不足：当前 DASHSCOPE_API_KEY 无权调用图片修复模型（'.$this->repairModel().'），请在百炼开通对应模型，或把 ALIYUN_IMAGE_REPAIR_MODEL 改成已开通的图像编辑模型。';
         }
         if (str_contains($text, 'arrearage')) {
             return '阿里云账户欠费，请到百炼控制台充值。';

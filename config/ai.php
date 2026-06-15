@@ -55,4 +55,13 @@ return [
     // 通过 config 读取，保证 `php artisan config:cache` 之后服务里仍能拿到 Key
     // （配置缓存生效时 .env 不再加载，运行时 env() 一律返回 null）。
     'dashscope_api_key' => env('DASHSCOPE_API_KEY', env('ALIYUN_API_KEY', '')),
+
+    // 图片修复（去水印/去广告/白底上图）走阿里云百炼万相图像编辑模型。
+    // wan2.7-image 与旧的 qwen-image-2.0 用同一个 multimodal-generation 同步端点、
+    // 同样的 input.messages（图+文）结构，切换只需改模型名；注意万相不支持
+    // negative_prompt / prompt_extend 参数。同样走 config 以兼容 config:cache。
+    'image_repair' => [
+        'model' => env('ALIYUN_IMAGE_REPAIR_MODEL', env('DASHSCOPE_IMAGE_REPAIR_MODEL', 'wan2.7-image')),
+        'size' => env('ALIYUN_IMAGE_REPAIR_SIZE', ''),
+    ],
 ];
