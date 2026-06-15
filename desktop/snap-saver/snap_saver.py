@@ -1384,8 +1384,8 @@ class SnapSaverApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title(APP_NAME)
-        self.root.geometry("1120x740")
-        self.root.minsize(980, 640)
+        self.root.geometry("1200x740")
+        self.root.minsize(1120, 640)
 
         config = load_config()
         saved_out = config.get("output_dir")
@@ -1416,6 +1416,8 @@ class SnapSaverApp:
         self.quality_var = tk.IntVar(value=int(config.get("quality", 95) or 95))
         self.auto_open_var = tk.BooleanVar(value=bool(config.get("auto_open", True)))
         self.repair_mode_var = tk.StringVar(value=repair_mode_label(str(config.get("repair_mode") or DEFAULT_REPAIR_MODE)))
+        # 修复后是否保留原图：False=直接覆盖原图（默认），True=原图备份到「_含水印原图」目录
+        self.keep_original_var = tk.BooleanVar(value=bool(config.get("keep_original", False)))
         self.category_var = tk.StringVar(value=MAIN_CATEGORY)
 
         self.status_var = tk.StringVar(value="导入「名称+链接」列表，点开始即可。")
@@ -1552,19 +1554,20 @@ class SnapSaverApp:
         ttk.Label(svc, textvariable=self.device_state_var, style="CardHint.TLabel").grid(
             row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        # 操作栏：导入 | 截图 | AI 修复
+        # 操作栏：导入 | 截图 ┄┄ 修复类型 + AI 修复（右对齐）
         toolbar = ttk.Frame(root, padding=(20, 0, 20, 8))
         toolbar.grid(row=2, column=0, sticky="ew")
+        toolbar.columnconfigure(7, weight=1)  # 弹性间隔，把修复区推到右侧
         ttk.Button(toolbar, text="导入文件", command=self.import_file).grid(row=0, column=0)
         ttk.Button(toolbar, text="从剪贴板导入", command=self.import_clipboard).grid(row=0, column=1, padx=(6, 0))
         ttk.Button(toolbar, text="导入图片文件夹", command=self.import_image_folder).grid(row=0, column=2, padx=(6, 0))
         ttk.Button(toolbar, text="清空列表", command=self.clear_rows).grid(row=0, column=3, padx=(6, 0))
-        ttk.Separator(toolbar, orient="vertical").grid(row=0, column=4, sticky="ns", padx=14)
+        ttk.Separator(toolbar, orient="vertical").grid(row=0, column=4, sticky="ns", padx=12)
         self.start_button = ttk.Button(toolbar, text="▶  开始截图", style="Accent.TButton", command=self.start_work)
         self.start_button.grid(row=0, column=5)
         self.stop_button = ttk.Button(toolbar, text="结束截图", command=self.stop_work, state="disabled")
         self.stop_button.grid(row=0, column=6, padx=(6, 0))
-        ttk.Separator(toolbar, orient="vertical").grid(row=0, column=7, sticky="ns", padx=14)
+        # 右侧修复区
         ttk.Label(toolbar, text="修复类型").grid(row=0, column=8, padx=(0, 6))
         self.repair_mode_combo = ttk.Combobox(
             toolbar,
@@ -1574,8 +1577,10 @@ class SnapSaverApp:
             width=12,
         )
         self.repair_mode_combo.grid(row=0, column=9)
+        ttk.Checkbutton(toolbar, text="保留原图", variable=self.keep_original_var,
+                        command=self._save_keep_original).grid(row=0, column=10, padx=(10, 0))
         self.repair_button = ttk.Button(toolbar, text="AI 智能修复", style="Repair.TButton", command=self.ai_repair)
-        self.repair_button.grid(row=0, column=10, padx=(8, 0))
+        self.repair_button.grid(row=0, column=11, padx=(8, 0))
 
         # 列表 + 日志
         body = ttk.Panedwindow(root, orient="horizontal")
@@ -1636,6 +1641,14 @@ class SnapSaverApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(value)
         self.set_status(f"已复制软件编号：{value}")
+
+    def _save_keep_original(self):
+        keep = bool(self.keep_original_var.get())
+        save_config({"keep_original": keep})
+        if keep:
+            self.set_status(f"修复后将保留原图：备份到各「{BACKUP_DIR_NAME}」目录。")
+        else:
+            self.set_status("修复后将直接覆盖原图（不保留备份）。")
 
     def _set_quota_from_response(self, data: dict):
         quota = data.get("quota") if isinstance(data, dict) else None
@@ -2267,26 +2280,30 @@ class SnapSaverApp:
     def _start_remove(self, targets: list, mode_key: str, mode_label: str):
         server_url = normalize_server_url(self.server_url_var.get())
         token = self.server_token
+        keep_original = bool(self.keep_original_var.get())
         self.temp_dir = Path(tempfile.mkdtemp(prefix="snap_wm_"))
         self.set_status(f"正在{mode_label} 0/{len(targets)}...")
-        self.log(f"开始{mode_label} {len(targets)} 张。")
+        self.log(f"开始{mode_label} {len(targets)} 张（{'保留原图备份' if keep_original else '直接覆盖原图'}）。")
         self.ai_events = queue.Queue()
         self.ai_thread = threading.Thread(
-            target=self._remove_worker, args=(server_url, token, targets, mode_key, mode_label), daemon=True)
+            target=self._remove_worker,
+            args=(server_url, token, targets, mode_key, mode_label, keep_original), daemon=True)
         self.ai_thread.start()
         self.root.after(200, self._poll_remove)
 
-    def _remove_worker(self, server_url: str, token: str, targets: list, mode_key: str, mode_label: str):
+    def _remove_worker(self, server_url: str, token: str, targets: list, mode_key: str,
+                       mode_label: str, keep_original: bool):
         done = 0
         failed = 0
         for index, path in enumerate(targets):
             if self.stop_event.is_set():
                 break
             try:
-                # 备份原图，再原地覆盖为修复结果
-                backup = path.parent / BACKUP_DIR_NAME
-                backup.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, backup / path.name)
+                # keep_original=True 时先把原图备份到「_含水印原图」目录；否则直接原地覆盖
+                if keep_original:
+                    backup = path.parent / BACKUP_DIR_NAME
+                    backup.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, backup / path.name)
                 server_remove_watermark_to(server_url, token, path, path, self.temp_dir, mode_key, self.stop_event)
                 done += 1
                 self.ai_events.put(("removed", index + 1, len(targets), path.name, mode_label))
@@ -2300,7 +2317,7 @@ class SnapSaverApp:
             except Exception as exc:
                 failed += 1
                 self.ai_events.put(("rm_error", str(exc), path.name))
-        self.ai_events.put(("remove_done", done, failed))
+        self.ai_events.put(("remove_done", done, failed, keep_original))
 
     def _poll_remove(self):
         try:
@@ -2322,24 +2339,28 @@ class SnapSaverApp:
                     messagebox.showerror(APP_NAME, f"图片修复停止：\n{event[1]}", parent=self.root)
                     return
                 elif kind == "remove_done":
-                    self._on_remove_done(event[1], event[2])
+                    self._on_remove_done(event[1], event[2], event[3])
                     return
         except queue.Empty:
             pass
         if self.busy:
             self.root.after(200, self._poll_remove)
 
-    def _on_remove_done(self, done: int, failed: int):
+    def _on_remove_done(self, done: int, failed: int, keep_original: bool):
         self.busy = False
         self.repair_button.configure(state="normal")
         if self.temp_dir:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.temp_dir = None
-        self.set_status(f"图片修复完成：成功 {done} 张，失败 {failed} 张。原图已备份到各「{BACKUP_DIR_NAME}」目录。")
+        if keep_original:
+            note = f"原图已备份到各「{BACKUP_DIR_NAME}」目录。"
+        else:
+            note = "修复结果已直接覆盖原图。"
+        self.set_status(f"图片修复完成：成功 {done} 张，失败 {failed} 张。{note}")
         self.log(f"图片修复结束：成功 {done}，失败 {failed}。")
         self.sync_quota()
-        messagebox.showinfo(APP_NAME, f"图片修复完成：成功 {done} 张，失败 {failed} 张。\n"
-                                      f"原图已备份到各商品的「{BACKUP_DIR_NAME}」目录。", parent=self.root)
+        messagebox.showinfo(APP_NAME, f"图片修复完成：成功 {done} 张，失败 {failed} 张。\n{note}",
+                            parent=self.root)
 
     # ----- 关闭 -----
 
