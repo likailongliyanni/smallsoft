@@ -1011,6 +1011,7 @@
                 'image-extract': document.querySelector('#sheetExportForm'),
                 'table-merge': panel,
                 'table-tidy': document.querySelector('#tableTidyPanel'),
+                'table-stats': document.querySelector('#tableStatsPanel'),
             };
             navItems.forEach(item => {
                 item.addEventListener('click', () => {

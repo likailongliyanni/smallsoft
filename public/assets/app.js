@@ -1103,6 +1103,13 @@ function initSpreadsheetImages() {
                 userTokenKey,
             });
         }
+        if (typeof window.initTableStatsLocal === 'function') {
+            window.initTableStatsLocal({
+                userApi,
+                escapeHtml,
+                userTokenKey,
+            });
+        }
         return;
     }
 

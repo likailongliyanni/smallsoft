@@ -41,6 +41,10 @@
                     <span class="excel-nav-icon">▥</span>
                     数据清洗
                 </button>
+                <button class="excel-nav-item" type="button" data-panel="table-stats">
+                    <span class="excel-nav-icon">∑</span>
+                    统计分析
+                </button>
             </div>
 
             <div class="excel-nav-block">
@@ -382,6 +386,116 @@
                 </div>
             </aside>
         </div>
+
+        <div id="tableStatsPanel" class="excel-work-area hidden">
+            <main class="excel-main">
+                <div class="excel-page-head">
+                    <div>
+                        <h1>统计分析</h1>
+                        <p>上传一张明细表，选维度和指标，按每个维度算出 Top N 排行。文件只在浏览器本地处理，不上传服务器。</p>
+                    </div>
+                    <label class="excel-upload-btn">
+                        <input id="statsFile" type="file" accept=".xlsx">
+                        选择表格
+                    </label>
+                </div>
+
+                <details class="excel-help" data-help>
+                    <summary>使用说明</summary>
+                    <ol>
+                        <li>选择一张明细表 .xlsx（如销售明细、订单表），文件只在浏览器本地读取，<strong>不会上传服务器</strong>。</li>
+                        <li>软件自动识别每列是「分类列」还是「数值列」。在右侧勾选要分析的<strong>维度</strong>（按什么分组，如品类 / 地区 / 销售员），再选<strong>统计方式</strong>和指标列。</li>
+                        <li>点「开始统计」：每个维度各出一张 Top N 排行榜，含数值和占比。</li>
+                        <li>确认后点「下载统计结果.xlsx」，每个维度一个 sheet。</li>
+                    </ol>
+                    <p>统计方式：求和 / 平均 / 去重计数需要选一个指标列；计数（行数）不需要指标列。</p>
+                </details>
+
+                <div class="excel-file-row">
+                    <div class="excel-file-chip">
+                        <span class="excel-file-icon">X</span>
+                        <span>
+                            <strong id="statsFileName">请选择一个 .xlsx 文件</strong>
+                            <small id="statsFileMeta">文件只在浏览器本地读取，不上传服务器</small>
+                        </span>
+                    </div>
+                    <div id="statsResultMeta" class="excel-meta">等待处理</div>
+                </div>
+
+                <div id="statsResultSection" class="merge-preview hidden">
+                    <h2>统计结果</h2>
+                    <div class="stats-insight-bar">
+                        <button id="statsInsightBtn" class="excel-secondary-action" type="button">✨ AI 解读结果</button>
+                    </div>
+                    <div id="statsInsight" class="stats-insight hidden"></div>
+                    <div id="statsResultBody"></div>
+                </div>
+            </main>
+
+            <aside class="excel-settings">
+                <div class="excel-settings-head">
+                    <span class="excel-setting-icon">∑</span>
+                    <div>
+                        <h2>统计分析设置</h2>
+                        <p>文件只在浏览器本地读取，不上传服务器</p>
+                    </div>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>AI 智能分析</h3>
+                    <textarea id="statsInstruction" rows="3" placeholder="用一句话说要分析什么，例如：各品类、各地区的销售额前五。留空则让 AI 看表自动推荐该分析哪些维度。"></textarea>
+                    <button id="statsAiBtn" class="excel-secondary-action stats-ai-btn" type="button">✨ AI 智能分析</button>
+                    <p class="excel-hint-line">AI 会自动选好维度、指标和统计方式并出结果，你也可以下面手动调整后重跑。需登录。</p>
+                </div>
+
+                <div class="excel-setting-section hidden" id="statsSheetSection">
+                    <h3>工作表</h3>
+                    <label class="excel-select-label">
+                        <select id="statsSheetSelect"></select>
+                    </label>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>维度（按什么分组，可多选）</h3>
+                    <div id="statsDimList" class="stats-checkbox-list">
+                        <p class="merge-file-empty">请先选择表格。</p>
+                    </div>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>统计方式</h3>
+                    <label class="excel-select-label">
+                        <select id="statsAggSelect">
+                            <option value="sum">求和</option>
+                            <option value="count">计数（行数）</option>
+                            <option value="avg">平均值</option>
+                            <option value="distinct">去重计数</option>
+                        </select>
+                    </label>
+                    <label class="excel-select-label" id="statsMetricLabel">
+                        指标列
+                        <select id="statsMetricSelect"></select>
+                    </label>
+                </div>
+
+                <div class="excel-setting-section">
+                    <h3>每个维度取前几名</h3>
+                    <input id="statsTopN" class="stats-topn-input" type="number" min="1" max="1000" value="10">
+                </div>
+
+                <div id="statsWarnings" class="tool-warnings hidden"></div>
+                <p id="statsStatus" class="excel-status"></p>
+
+                <button id="statsRunBtn" class="excel-primary-action" type="button">开始统计</button>
+                <button id="statsDownloadBtn" class="excel-secondary-action hidden" type="button">下载统计结果.xlsx</button>
+                <button id="statsClearBtn" class="excel-secondary-action" type="button">清空</button>
+
+                <div class="excel-tip">
+                    <strong>小贴士</strong>
+                    <p>「计数（行数）」统计每个维度值出现多少行，不需要指标列；「去重计数」统计指标列在该维度下有多少个不同值（如各地区有多少个不同客户）。</p>
+                </div>
+            </aside>
+        </div>
     </div>
 </section>
 
@@ -389,4 +503,5 @@
 <script src="/assets/table-merge-local.js?v={{ time() }}"></script>
 <script src="/assets/table-tidy-local.js?v={{ time() }}"></script>
 <script src="/assets/table-tidy-ui.js?v={{ time() }}"></script>
+<script src="/assets/table-stats-ui.js?v={{ time() }}"></script>
 @endsection
