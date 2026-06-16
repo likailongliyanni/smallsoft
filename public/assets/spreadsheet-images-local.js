@@ -1,0 +1,1074 @@
+(function () {
+    'use strict';
+
+    window.initSpreadsheetImagesLocal = function initSpreadsheetImagesLocal(deps) {
+        const userApi = deps.userApi;
+        const formToObject = deps.formToObject;
+        const escapeHtml = deps.escapeHtml;
+        const userTokenKey = deps.userTokenKey;
+
+        const loginPanel = document.querySelector('#sheetLoginPanel');
+        const loginForm = document.querySelector('#sheetLoginForm');
+        const registerBtn = document.querySelector('#sheetRegisterBtn');
+        const loginResult = document.querySelector('#sheetLoginResult');
+        const logoutBtn = document.querySelector('#sheetLogoutBtn');
+        const userBadge = document.querySelector('#sheetUserBadge');
+        const exportForm = document.querySelector('#sheetExportForm');
+        const exportBtn = document.querySelector('#sheetExportBtn');
+        const clearBtn = document.querySelector('#sheetClearBtn');
+        const exportResult = document.querySelector('#sheetExportResult');
+        const resultMeta = document.querySelector('#sheetResultMeta');
+        const downloadBtn = document.querySelector('#sheetDownloadBtn');
+        const planBox = document.querySelector('#sheetPlanBox');
+        const warningsBox = document.querySelector('#sheetWarnings');
+        const previewWrap = document.querySelector('#sheetPreviewWrap');
+        const previewBody = document.querySelector('#sheetPreviewBody');
+        const fileInput = document.querySelector('#sheetFile');
+        const localPreview = document.querySelector('#sheetLocalPreview');
+        const sheetTabs = document.querySelector('#sheetTabs');
+        const gridPreview = document.querySelector('#sheetGridPreview');
+        const imagePreview = document.querySelector('#sheetImagePreview');
+
+        let workbook = null;
+        let activeSheetIndex = 0;
+        let exportBlob = null;
+        let exportName = 'spreadsheet-images.zip';
+
+        syncUserState();
+        renderExportResult(null);
+
+        loginForm?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await loginOrRegister('/api/auth/login');
+        });
+
+        registerBtn?.addEventListener('click', async () => {
+            await loginOrRegister('/api/auth/register');
+        });
+
+        logoutBtn?.addEventListener('click', () => {
+            localStorage.removeItem(userTokenKey);
+            syncUserState();
+            setResult(loginResult, '已退出');
+        });
+
+        fileInput?.addEventListener('change', async () => {
+            const file = fileInput.files?.[0];
+            revokePreviewUrls();
+            workbook = null;
+            exportBlob = null;
+            renderExportResult(null);
+            if (!file) {
+                renderWorkbookPreview(null);
+                return;
+            }
+
+            exportBtn.disabled = true;
+            setResult(exportResult, '正在本地读取表格...');
+            try {
+                workbook = await parseXlsxWorkbook(file);
+                activeSheetIndex = 0;
+                renderWorkbookPreview(workbook);
+                const imageCount = workbook.sheets.reduce((sum, sheet) => sum + sheet.images.length, 0);
+                setResult(exportResult, `已本地读取：${workbook.sheets.length} 个 sheet，${imageCount} 张图片`, 'success');
+            } catch (error) {
+                workbook = null;
+                renderWorkbookPreview(null);
+                setResult(exportResult, error.message, 'error');
+            } finally {
+                exportBtn.disabled = false;
+            }
+        });
+
+        clearBtn?.addEventListener('click', () => {
+            exportForm?.reset();
+            revokePreviewUrls();
+            workbook = null;
+            exportBlob = null;
+            renderWorkbookPreview(null);
+            renderExportResult(null);
+            setResult(exportResult, '');
+        });
+
+        exportForm?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            if (!workbook) {
+                setResult(exportResult, '请先选择一个 xlsx 表格。', 'error');
+                return;
+            }
+
+            const instruction = String(document.querySelector('#sheetInstruction')?.value || '').trim();
+            if (!instruction) {
+                setResult(exportResult, '请填写整理要求。', 'error');
+                return;
+            }
+
+            exportBtn.disabled = true;
+            downloadBtn?.classList.add('hidden');
+            setResult(exportResult, '正在本地整理图片...');
+            try {
+                const result = await exportImagesLocally(workbook, instruction);
+                exportBlob = result.blob;
+                exportName = result.fileName;
+                renderExportResult(result);
+                setResult(exportResult, `本地整理完成：${result.images_count} 张图片`, 'success');
+            } catch (error) {
+                renderExportResult(null);
+                setResult(exportResult, error.message, 'error');
+            } finally {
+                exportBtn.disabled = false;
+            }
+        });
+
+        downloadBtn?.addEventListener('click', () => {
+            if (!exportBlob) return;
+            saveBlob(exportBlob, exportName);
+        });
+
+        async function loginOrRegister(path) {
+            const data = formToObject(loginForm);
+            data.username = String(data.username || '').trim();
+            data.password = String(data.password || '');
+            if (!data.username || !data.password) {
+                setResult(loginResult, '请填写用户名和密码', 'error');
+                return;
+            }
+            if (path.includes('/register') && data.password.length < 6) {
+                setResult(loginResult, '注册密码至少 6 位', 'error');
+                return;
+            }
+            setResult(loginResult, '处理中...');
+            try {
+                const response = await userApi(path, {method: 'POST', body: data});
+                localStorage.setItem(userTokenKey, response.token);
+                syncUserState(response.user);
+                setResult(loginResult, '已登录', 'success');
+            } catch (error) {
+                setResult(loginResult, error.message, 'error');
+            }
+        }
+
+        async function syncUserState(user = null) {
+            const token = localStorage.getItem(userTokenKey);
+            if (!token) {
+                loginPanel?.classList.remove('hidden');
+                logoutBtn?.classList.add('hidden');
+                if (userBadge) userBadge.textContent = '本地处理';
+                return;
+            }
+
+            try {
+                if (!user) {
+                    const response = await userApi('/api/me');
+                    user = response.user;
+                }
+                loginPanel?.classList.add('hidden');
+                logoutBtn?.classList.remove('hidden');
+                if (userBadge) {
+                    userBadge.textContent = `${user.username} · ${user.available_generations ?? 0} 次`;
+                }
+            } catch (error) {
+                localStorage.removeItem(userTokenKey);
+                loginPanel?.classList.remove('hidden');
+                logoutBtn?.classList.add('hidden');
+                if (userBadge) userBadge.textContent = '本地处理';
+            }
+        }
+
+        function renderWorkbookPreview(book) {
+            if (!book) {
+                localPreview?.classList.add('hidden');
+                if (sheetTabs) sheetTabs.innerHTML = '';
+                if (gridPreview) gridPreview.innerHTML = '';
+                if (imagePreview) imagePreview.innerHTML = '';
+                if (resultMeta) resultMeta.textContent = '等待处理';
+                return;
+            }
+
+            localPreview?.classList.remove('hidden');
+            if (resultMeta) {
+                const imageCount = book.sheets.reduce((sum, sheet) => sum + sheet.images.length, 0);
+                resultMeta.textContent = `${book.sheets.length} 个 sheet · ${imageCount} 张图片 · 本地预览`;
+            }
+
+            if (sheetTabs) {
+                sheetTabs.innerHTML = book.sheets.map((sheet, index) => `
+                    <button class="sheet-tab ${index === activeSheetIndex ? 'active' : ''}" type="button" data-sheet-index="${index}">
+                        ${escapeHtml(sheet.name)} (${sheet.images.length})
+                    </button>
+                `).join('');
+                sheetTabs.querySelectorAll('.sheet-tab').forEach((button) => {
+                    button.addEventListener('click', () => {
+                        activeSheetIndex = Number(button.dataset.sheetIndex) || 0;
+                        renderWorkbookPreview(book);
+                    });
+                });
+            }
+
+            const sheet = book.sheets[activeSheetIndex] || book.sheets[0];
+            renderSheetGrid(sheet);
+            renderSheetImages(sheet);
+        }
+
+        function renderSheetGrid(sheet) {
+            if (!gridPreview || !sheet) return;
+
+            const maxRow = Math.min(sheet.maxRow || 20, 40);
+            const maxCol = Math.min(sheet.maxCol || 10, 12);
+            let html = '<thead><tr><th class="row-head"></th>';
+            for (let col = 1; col <= maxCol; col++) {
+                html += `<th>${columnLetters(col)}</th>`;
+            }
+            html += '</tr></thead><tbody>';
+
+            for (let row = 1; row <= maxRow; row++) {
+                html += `<tr><th class="row-head">${row}</th>`;
+                for (let col = 1; col <= maxCol; col++) {
+                    const value = sheet.rows.get(row)?.get(col) || '';
+                    html += `<td title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
+                }
+                html += '</tr>';
+            }
+
+            html += '</tbody>';
+            gridPreview.innerHTML = html;
+        }
+
+        function renderSheetImages(sheet) {
+            if (!imagePreview || !sheet) return;
+
+            if (sheet.images.length === 0) {
+                imagePreview.innerHTML = '<div class="sheet-image-card"><span>当前 sheet 没有内嵌图片</span></div>';
+                return;
+            }
+
+            imagePreview.innerHTML = sheet.images.slice(0, 80).map((image, index) => `
+                <div class="sheet-image-card">
+                    <img src="${image.url}" alt="">
+                    <span>${escapeHtml(columnLetters(image.col) + image.row)} · ${index + 1}</span>
+                </div>
+            `).join('');
+        }
+
+        function renderExportResult(data) {
+            downloadBtn?.classList.toggle('hidden', !data?.blob);
+            if (resultMeta) {
+                resultMeta.textContent = data
+                    ? `${data.images_count} 张图片 · ${data.sheets_count} 个 sheet · 本地完成`
+                    : '等待处理';
+            }
+
+            if (planBox) {
+                planBox.classList.toggle('hidden', !data?.plan);
+                planBox.textContent = data?.plan ? JSON.stringify(data.plan, null, 2) : '';
+            }
+
+            if (warningsBox) {
+                const warnings = data?.warnings || [];
+                warningsBox.classList.toggle('hidden', warnings.length === 0);
+                warningsBox.textContent = warnings.join('\n');
+            }
+
+            if (previewWrap && previewBody) {
+                const rows = data?.manifest_preview || [];
+                previewWrap.classList.toggle('hidden', rows.length === 0);
+                previewBody.innerHTML = rows.map(row => `
+                    <tr>
+                        <td>${escapeHtml(row.sheet)}</td>
+                        <td>${escapeHtml(row.row)}</td>
+                        <td>${escapeHtml(row.image_index)}</td>
+                        <td>${escapeHtml(row.file_path)}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        function revokePreviewUrls() {
+            if (!workbook) return;
+            workbook.sheets.forEach(sheet => {
+                sheet.images.forEach(image => {
+                    if (image.url) URL.revokeObjectURL(image.url);
+                });
+            });
+        }
+
+        function setResult(el, message, type = '') {
+            if (!el) return;
+            el.textContent = message || '';
+            el.classList.toggle('error', type === 'error');
+            el.classList.toggle('success', type === 'success');
+        }
+    };
+
+    async function parseXlsxWorkbook(file) {
+        if (!('DecompressionStream' in window)) {
+            throw new Error('当前浏览器不支持本地解压 xlsx，请使用新版 Chrome 或 Edge。');
+        }
+
+        const zip = await LocalZipReader.fromFile(file);
+        const sharedStrings = await readSharedStrings(zip);
+        const sheetRefs = await readWorkbookSheets(zip);
+        const sheets = [];
+
+        for (const sheetRef of sheetRefs) {
+            const rowsInfo = await readSheetRows(zip, sheetRef.path, sharedStrings);
+            const images = await readSheetImages(zip, sheetRef.path);
+            const headerRow = guessHeaderRow(rowsInfo.rows, images);
+            const headers = headersForRow(rowsInfo.rows.get(headerRow), rowsInfo.maxCol);
+
+            sheets.push({
+                name: sheetRef.name,
+                path: sheetRef.path,
+                rows: rowsInfo.rows,
+                maxRow: rowsInfo.maxRow,
+                maxCol: rowsInfo.maxCol,
+                images,
+                headerRow,
+                headers,
+            });
+        }
+
+        if (sheets.length === 0) {
+            throw new Error('没有读取到工作表。');
+        }
+
+        return {fileName: file.name, zip, sheets};
+    }
+
+    async function exportImagesLocally(workbook, instruction) {
+        const plan = makeLocalPlan(workbook, instruction);
+        const files = [];
+        const manifestRows = [];
+        const warnings = [];
+        const usedPaths = new Set();
+        const rowImageIndexes = new Map();
+        let imageCount = 0;
+        let sheetCount = 0;
+        let globalIndex = 0;
+
+        for (const sheet of workbook.sheets) {
+            if (sheet.images.length === 0) continue;
+            sheetCount++;
+
+            for (const image of sheet.images) {
+                const matchedRow = matchImageRow(sheet.rows, sheet.headerRow, image.row);
+                const rowData = rowToAssoc(sheet.rows.get(matchedRow), sheet.headers);
+                const rowKey = `${sheet.name}#${matchedRow}`;
+                const rowImageIndex = (rowImageIndexes.get(rowKey) || 0) + 1;
+                rowImageIndexes.set(rowKey, rowImageIndex);
+                globalIndex++;
+
+                const placeholders = makePlaceholders(rowData, sheet.name, matchedRow, rowImageIndex, globalIndex);
+                const processed = await processImage(image.bytes, image.extension, plan.image_processing, warnings);
+                let folder = renderFolder(plan.folder_template, placeholders);
+                let filenameBase = renderTemplate(plan.filename_template, placeholders);
+                if (!filenameBase) {
+                    filenameBase = renderTemplate(plan.fallback_filename_template, placeholders);
+                }
+                filenameBase = sanitizePathPart(filenameBase, `image-${globalIndex}`);
+                const entryName = uniquePath(`${folder ? folder + '/' : ''}${filenameBase}.${processed.extension}`, usedPaths);
+
+                files.push({name: entryName, bytes: processed.bytes});
+                imageCount++;
+
+                manifestRows.push({
+                    sheet: sheet.name,
+                    row: matchedRow,
+                    image_index: rowImageIndex,
+                    file_path: entryName,
+                    source_media: image.path,
+                    anchor: columnLetters(image.col) + image.row,
+                });
+            }
+        }
+
+        if (imageCount < 1) {
+            throw new Error('没有找到可提取的内嵌图片。');
+        }
+
+        files.push({name: 'manifest.csv', bytes: utf8Bytes('\uFEFF' + csv(manifestRows))});
+        files.push({name: 'plan.json', bytes: utf8Bytes(JSON.stringify(plan, null, 2))});
+
+        const blob = createStoredZip(files);
+        const baseName = sanitizePathPart(workbook.fileName.replace(/\.xlsx$/i, ''), 'spreadsheet-images');
+
+        return {
+            blob,
+            fileName: `${baseName}-images.zip`,
+            images_count: imageCount,
+            sheets_count: sheetCount,
+            plan,
+            manifest_preview: manifestRows.slice(0, 50),
+            warnings,
+        };
+    }
+
+    function makeLocalPlan(workbook, instruction) {
+        const fields = [];
+        const addField = (name, keywords) => {
+            if (containsAny(instruction, keywords) || workbook.sheets.some(sheet => sheet.headers.some(header => containsAny(header, keywords)))) {
+                fields.push(name);
+            }
+        };
+
+        addField('货号', ['货号', '款号', 'sku', 'SKU', '编码', '商品编码', 'item', 'code']);
+        addField('颜色', ['颜色', '色号', 'color']);
+        addField('尺码', ['尺码', '尺寸', 'size']);
+        addField('品名', ['品名', '名称', '商品名', 'title', 'name']);
+        addField('品牌', ['品牌', 'brand']);
+        addField('分类', ['分类', '类目', 'category']);
+
+        if (fields.length === 0) fields.push('货号');
+        fields.push('图片序号');
+
+        let folderTemplate = '';
+        if (containsAny(instruction, ['每个sheet', '每个 sheet', '按sheet', '按 sheet', 'sheet单独', '工作表单独'])) {
+            folderTemplate = '{sheet}';
+        } else if (containsAny(instruction, ['按品牌', '品牌分', '品牌文件夹'])) {
+            folderTemplate = '{品牌}';
+        } else if (containsAny(instruction, ['按分类', '按类目', '分类文件夹', '类目文件夹'])) {
+            folderTemplate = '{分类}';
+        } else if (workbook.sheets.length > 1) {
+            folderTemplate = '{sheet}';
+        }
+
+        let resize = null;
+        const resizeMatch = instruction.match(/(\d{2,5})\s*[xX×*]\s*(\d{2,5})/u);
+        if (resizeMatch) {
+            resize = {width: Number(resizeMatch[1]), height: Number(resizeMatch[2])};
+        }
+
+        let format = 'original';
+        if (containsAny(instruction, ['jpg', 'jpeg', 'JPG', 'JPEG'])) format = 'jpg';
+        if (containsAny(instruction, ['png', 'PNG'])) format = 'png';
+
+        return {
+            mode: 'browser-local',
+            filename_template: `{${fields.join('}_{')}}`,
+            folder_template: folderTemplate,
+            fallback_filename_template: '{sheet}_{row}_{图片序号}',
+            image_match_rule: 'anchor_row',
+            image_processing: {
+                crop_whitespace: containsAny(instruction, ['裁剪', '裁掉白边', '去白边', '白边']),
+                resize,
+                enhance: containsAny(instruction, ['清晰', '清晰化', '锐化', '增强']),
+                format,
+            },
+        };
+    }
+
+    class LocalZipReader {
+        static async fromFile(file) {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            return new LocalZipReader(bytes);
+        }
+
+        constructor(bytes) {
+            this.bytes = bytes;
+            this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            this.entries = this.readCentralDirectory();
+        }
+
+        async text(name) {
+            return new TextDecoder('utf-8').decode(await this.fileBytes(name));
+        }
+
+        async fileBytes(name) {
+            const entry = this.entries.get(name) || this.entries.get(name.replace(/^\/+/, ''));
+            if (!entry) throw new Error(`xlsx 缺少文件：${name}`);
+
+            const local = entry.localOffset;
+            if (this.u32(local) !== 0x04034b50) {
+                throw new Error(`zip 本地文件头损坏：${name}`);
+            }
+            const nameLen = this.u16(local + 26);
+            const extraLen = this.u16(local + 28);
+            const dataStart = local + 30 + nameLen + extraLen;
+            const compressed = this.bytes.slice(dataStart, dataStart + entry.compressedSize);
+
+            if (entry.method === 0) return compressed;
+            if (entry.method === 8) return inflateRaw(compressed);
+            throw new Error(`不支持的 zip 压缩方式：${entry.method}`);
+        }
+
+        readCentralDirectory() {
+            const eocd = this.findEocd();
+            const total = this.u16(eocd + 10);
+            let offset = this.u32(eocd + 16);
+            const entries = new Map();
+            const decoder = new TextDecoder('utf-8');
+
+            for (let i = 0; i < total; i++) {
+                if (this.u32(offset) !== 0x02014b50) {
+                    throw new Error('zip 中央目录损坏。');
+                }
+                const method = this.u16(offset + 10);
+                const compressedSize = this.u32(offset + 20);
+                const uncompressedSize = this.u32(offset + 24);
+                const nameLen = this.u16(offset + 28);
+                const extraLen = this.u16(offset + 30);
+                const commentLen = this.u16(offset + 32);
+                const localOffset = this.u32(offset + 42);
+                const name = decoder.decode(this.bytes.slice(offset + 46, offset + 46 + nameLen));
+                entries.set(name, {name, method, compressedSize, uncompressedSize, localOffset});
+                offset += 46 + nameLen + extraLen + commentLen;
+            }
+
+            return entries;
+        }
+
+        findEocd() {
+            const min = Math.max(0, this.bytes.length - 22 - 65535);
+            for (let i = this.bytes.length - 22; i >= min; i--) {
+                if (this.u32(i) === 0x06054b50) return i;
+            }
+            throw new Error('不是有效的 xlsx/zip 文件。');
+        }
+
+        u16(offset) { return this.view.getUint16(offset, true); }
+        u32(offset) { return this.view.getUint32(offset, true); }
+    }
+
+    async function inflateRaw(bytes) {
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    async function readSharedStrings(zip) {
+        if (!zip.entries.has('xl/sharedStrings.xml')) return [];
+        const dom = xml(await zip.text('xl/sharedStrings.xml'));
+        return nodes(dom, 'si').map(si => nodes(si, 't').map(t => t.textContent || '').join(''));
+    }
+
+    async function readWorkbookSheets(zip) {
+        const dom = xml(await zip.text('xl/workbook.xml'));
+        const rels = await readRelationships(zip, 'xl/_rels/workbook.xml.rels', 'xl/workbook.xml');
+        return nodes(dom, 'sheet').map((sheet, index) => {
+            const rid = sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
+                || sheet.getAttribute('r:id');
+            return {
+                name: sheet.getAttribute('name') || `Sheet${index + 1}`,
+                path: rels.get(rid)?.target,
+            };
+        }).filter(sheet => sheet.path);
+    }
+
+    async function readRelationships(zip, relsPath, baseFile) {
+        if (!zip.entries.has(relsPath)) return new Map();
+        const dom = xml(await zip.text(relsPath));
+        const rels = new Map();
+        nodes(dom, 'Relationship').forEach(rel => {
+            rels.set(rel.getAttribute('Id'), {
+                type: rel.getAttribute('Type'),
+                target: resolvePath(baseFile, rel.getAttribute('Target') || ''),
+            });
+        });
+        return rels;
+    }
+
+    async function readSheetRows(zip, sheetPath, sharedStrings) {
+        const dom = xml(await zip.text(sheetPath));
+        const rows = new Map();
+        let maxRow = 0;
+        let maxCol = 0;
+
+        nodes(dom, 'row').forEach((rowNode, rowIndex) => {
+            const rowNumber = Number(rowNode.getAttribute('r')) || rowIndex + 1;
+            maxRow = Math.max(maxRow, rowNumber);
+            const cells = new Map();
+            nodes(rowNode, 'c').forEach(cell => {
+                const ref = cell.getAttribute('r') || '';
+                const col = ref ? columnNumber(ref) : cells.size + 1;
+                maxCol = Math.max(maxCol, col);
+                const value = cellValue(cell, sharedStrings);
+                if (value !== '') cells.set(col, value);
+            });
+            rows.set(rowNumber, cells);
+        });
+
+        return {rows, maxRow, maxCol};
+    }
+
+    async function readSheetImages(zip, sheetPath) {
+        const sheetDom = xml(await zip.text(sheetPath));
+        const sheetRels = await readRelationships(zip, relsPath(sheetPath), sheetPath);
+        const images = [];
+
+        for (const drawing of nodes(sheetDom, 'drawing')) {
+            const rid = drawing.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
+                || drawing.getAttribute('r:id');
+            const drawingPath = sheetRels.get(rid)?.target;
+            if (!drawingPath) continue;
+            images.push(...await readDrawingImages(zip, drawingPath));
+        }
+
+        images.sort((a, b) => a.row - b.row || a.col - b.col || a.path.localeCompare(b.path));
+        return images;
+    }
+
+    async function readDrawingImages(zip, drawingPath) {
+        const dom = xml(await zip.text(drawingPath));
+        const rels = await readRelationships(zip, relsPath(drawingPath), drawingPath);
+        const anchors = [...nodes(dom, 'twoCellAnchor'), ...nodes(dom, 'oneCellAnchor')];
+        const images = [];
+
+        for (const anchor of anchors) {
+            const from = nodes(anchor, 'from')[0];
+            const row = Number(nodes(from, 'row')[0]?.textContent || 0) + 1;
+            const col = Number(nodes(from, 'col')[0]?.textContent || 0) + 1;
+            const blip = nodes(anchor, 'blip')[0];
+            const embed = blip?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed')
+                || blip?.getAttribute('r:embed');
+            const path = rels.get(embed)?.target;
+            if (!path || !zip.entries.has(path)) continue;
+
+            const bytes = await zip.fileBytes(path);
+            const extension = safeImageExtension(path.split('.').pop() || 'jpg');
+            const blob = new Blob([bytes], {type: imageMime(extension)});
+            images.push({
+                row: Math.max(1, row),
+                col: Math.max(1, col),
+                path,
+                bytes,
+                extension,
+                url: URL.createObjectURL(blob),
+            });
+        }
+
+        return images;
+    }
+
+    function cellValue(cell, sharedStrings) {
+        const type = cell.getAttribute('t') || '';
+        if (type === 's') {
+            const index = Number(firstText(cell, 'v'));
+            return String(sharedStrings[index] || '').trim();
+        }
+        if (type === 'inlineStr') {
+            return nodes(cell, 't').map(t => t.textContent || '').join('').trim();
+        }
+        if (type === 'b') {
+            return firstText(cell, 'v') === '1' ? 'TRUE' : 'FALSE';
+        }
+        return firstText(cell, 'v').trim();
+    }
+
+    async function processImage(bytes, extension, processing, warnings) {
+        const targetFormat = processing.format === 'png' ? 'png' : (processing.format === 'jpg' ? 'jpg' : extension);
+        const shouldProcess = processing.crop_whitespace || processing.resize || processing.enhance || processing.format !== 'original';
+        if (!shouldProcess) {
+            return {bytes, extension: safeImageExtension(extension)};
+        }
+
+        try {
+            const bitmap = await createImageBitmap(new Blob([bytes], {type: imageMime(extension)}));
+            let canvas = document.createElement('canvas');
+            let ctx = canvas.getContext('2d', {willReadFrequently: true});
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            ctx.drawImage(bitmap, 0, 0);
+
+            if (processing.crop_whitespace) {
+                canvas = cropWhitespace(canvas);
+                ctx = canvas.getContext('2d', {willReadFrequently: true});
+            }
+
+            if (processing.resize) {
+                canvas = resizeToCanvas(canvas, processing.resize.width, processing.resize.height);
+                ctx = canvas.getContext('2d', {willReadFrequently: true});
+            }
+
+            if (processing.enhance) {
+                canvas = redrawWithFilter(canvas, 'contrast(1.08) saturate(1.04)');
+            }
+
+            const outExt = targetFormat === 'png' ? 'png' : 'jpg';
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, imageMime(outExt), 0.92));
+            return {bytes: new Uint8Array(await blob.arrayBuffer()), extension: outExt};
+        } catch (error) {
+            warnings.push(`图片处理失败，已保留原图：${error.message}`);
+            return {bytes, extension: safeImageExtension(extension)};
+        }
+    }
+
+    function cropWhitespace(canvas) {
+        const ctx = canvas.getContext('2d', {willReadFrequently: true});
+        const {width, height} = canvas;
+        const data = ctx.getImageData(0, 0, width, height).data;
+        let minX = width, minY = height, maxX = -1, maxY = -1;
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const i = (y * width + x) * 4;
+                const a = data[i + 3];
+                const isWhite = data[i] > 245 && data[i + 1] > 245 && data[i + 2] > 245;
+                if (a > 10 && !isWhite) {
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+        }
+
+        if (maxX < minX || maxY < minY) return canvas;
+        const pad = 4;
+        minX = Math.max(0, minX - pad);
+        minY = Math.max(0, minY - pad);
+        maxX = Math.min(width - 1, maxX + pad);
+        maxY = Math.min(height - 1, maxY + pad);
+
+        const out = document.createElement('canvas');
+        out.width = maxX - minX + 1;
+        out.height = maxY - minY + 1;
+        out.getContext('2d').drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+        return out;
+    }
+
+    function resizeToCanvas(source, width, height) {
+        width = Math.max(1, Math.min(Number(width) || source.width, 5000));
+        height = Math.max(1, Math.min(Number(height) || source.height, 5000));
+        const scale = Math.min(width / source.width, height / source.height);
+        const drawW = Math.max(1, Math.floor(source.width * scale));
+        const drawH = Math.max(1, Math.floor(source.height * scale));
+        const out = document.createElement('canvas');
+        out.width = width;
+        out.height = height;
+        const ctx = out.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(source, Math.floor((width - drawW) / 2), Math.floor((height - drawH) / 2), drawW, drawH);
+        return out;
+    }
+
+    function redrawWithFilter(source, filter) {
+        const out = document.createElement('canvas');
+        out.width = source.width;
+        out.height = source.height;
+        const ctx = out.getContext('2d');
+        ctx.filter = filter;
+        ctx.drawImage(source, 0, 0);
+        return out;
+    }
+
+    function createStoredZip(files) {
+        const encoder = new TextEncoder();
+        const chunks = [];
+        const central = [];
+        let offset = 0;
+        const now = new Date();
+        const dosTime = ((now.getHours() & 31) << 11) | ((now.getMinutes() & 63) << 5) | Math.floor(now.getSeconds() / 2);
+        const dosDate = (((now.getFullYear() - 1980) & 127) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+
+        for (const file of files) {
+            const nameBytes = encoder.encode(file.name.replace(/^\/+/, ''));
+            const data = file.bytes instanceof Uint8Array ? file.bytes : new Uint8Array(file.bytes);
+            const crc = crc32(data);
+            const local = new Uint8Array(30 + nameBytes.length);
+            const view = new DataView(local.buffer);
+            writeLocalHeader(view, crc, data.length, nameBytes.length, dosTime, dosDate);
+            local.set(nameBytes, 30);
+            chunks.push(local, data);
+
+            const centralHeader = new Uint8Array(46 + nameBytes.length);
+            const centralView = new DataView(centralHeader.buffer);
+            writeCentralHeader(centralView, crc, data.length, nameBytes.length, offset, dosTime, dosDate);
+            centralHeader.set(nameBytes, 46);
+            central.push(centralHeader);
+            offset += local.length + data.length;
+        }
+
+        const centralOffset = offset;
+        let centralSize = 0;
+        central.forEach(chunk => {
+            chunks.push(chunk);
+            centralSize += chunk.length;
+            offset += chunk.length;
+        });
+
+        const eocd = new Uint8Array(22);
+        const eocdView = new DataView(eocd.buffer);
+        eocdView.setUint32(0, 0x06054b50, true);
+        eocdView.setUint16(8, files.length, true);
+        eocdView.setUint16(10, files.length, true);
+        eocdView.setUint32(12, centralSize, true);
+        eocdView.setUint32(16, centralOffset, true);
+        chunks.push(eocd);
+
+        return new Blob(chunks, {type: 'application/zip'});
+    }
+
+    function writeLocalHeader(view, crc, size, nameLength, dosTime, dosDate) {
+        view.setUint32(0, 0x04034b50, true);
+        view.setUint16(4, 20, true);
+        view.setUint16(6, 0x0800, true);
+        view.setUint16(8, 0, true);
+        view.setUint16(10, dosTime, true);
+        view.setUint16(12, dosDate, true);
+        view.setUint32(14, crc, true);
+        view.setUint32(18, size, true);
+        view.setUint32(22, size, true);
+        view.setUint16(26, nameLength, true);
+    }
+
+    function writeCentralHeader(view, crc, size, nameLength, offset, dosTime, dosDate) {
+        view.setUint32(0, 0x02014b50, true);
+        view.setUint16(4, 20, true);
+        view.setUint16(6, 20, true);
+        view.setUint16(8, 0x0800, true);
+        view.setUint16(10, 0, true);
+        view.setUint16(12, dosTime, true);
+        view.setUint16(14, dosDate, true);
+        view.setUint32(16, crc, true);
+        view.setUint32(20, size, true);
+        view.setUint32(24, size, true);
+        view.setUint16(28, nameLength, true);
+        view.setUint32(42, offset, true);
+    }
+
+    const crcTable = (() => {
+        const table = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+            table[n] = c >>> 0;
+        }
+        return table;
+    })();
+
+    function crc32(bytes) {
+        let crc = 0xffffffff;
+        for (let i = 0; i < bytes.length; i++) {
+            crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+        }
+        return (crc ^ 0xffffffff) >>> 0;
+    }
+
+    function guessHeaderRow(rows, images) {
+        const firstImageRow = images.length ? Math.min(...images.map(image => image.row)) : 20;
+        const limit = Math.max(1, Math.min(30, firstImageRow));
+        let bestRow = 1;
+        let bestScore = -1;
+
+        for (const [rowNumber, cells] of rows.entries()) {
+            if (rowNumber > limit) continue;
+            const values = [...cells.values()].filter(Boolean);
+            let score = values.length;
+            values.forEach(value => {
+                if (containsAny(value, ['货号', '款号', 'sku', '编码', '品名', '名称', '颜色', '尺码', '品牌', '分类', '图片', 'image'])) {
+                    score += 4;
+                }
+            });
+            if (score > bestScore) {
+                bestScore = score;
+                bestRow = rowNumber;
+            }
+        }
+
+        return bestRow;
+    }
+
+    function headersForRow(row, maxCol) {
+        const headers = [];
+        for (let col = 1; col <= Math.max(1, maxCol); col++) {
+            headers[col] = String(row?.get(col) || columnLetters(col)).trim();
+        }
+        return headers;
+    }
+
+    function matchImageRow(rows, headerRow, anchorRow) {
+        const row = Math.max(headerRow + 1, anchorRow);
+        const candidates = [row, row + 1, row - 1, row + 2, row - 2];
+        return candidates.find(candidate => candidate > headerRow && hasAnyValue(rows.get(candidate))) || row;
+    }
+
+    function rowToAssoc(row, headers) {
+        const data = {};
+        headers.forEach((header, col) => {
+            if (!col) return;
+            const value = String(row?.get(col) || '').trim();
+            if (value) data[header] = value;
+        });
+        return data;
+    }
+
+    function makePlaceholders(rowData, sheetName, row, rowImageIndex, globalIndex) {
+        const values = {
+            sheet: sheetName,
+            sheet_name: sheetName,
+            工作表: sheetName,
+            row: String(row),
+            行号: String(row),
+            index: String(globalIndex),
+            序号: String(globalIndex),
+            图片序号: String(rowImageIndex),
+            image_index: String(rowImageIndex),
+        };
+
+        Object.entries(rowData).forEach(([key, value]) => {
+            values[key] = String(value);
+            values[normalizeKey(key)] = String(value);
+        });
+
+        const aliases = {
+            货号: ['货号', '款号', 'sku', 'SKU', '编码', '商品编码', 'item', 'code'],
+            颜色: ['颜色', '色号', 'color'],
+            尺码: ['尺码', '尺寸', 'size'],
+            品名: ['品名', '名称', '商品名', 'title', 'name'],
+            品牌: ['品牌', 'brand'],
+            分类: ['分类', '类目', 'category'],
+        };
+
+        Object.entries(aliases).forEach(([canonical, keywords]) => {
+            const found = Object.entries(rowData).find(([key, value]) => containsAny(key, keywords) && String(value).trim());
+            if (found) values[canonical] = String(found[1]).trim();
+        });
+
+        return values;
+    }
+
+    function renderTemplate(template, values) {
+        return String(template || '')
+            .replace(/\{([^}]+)\}/gu, (_, key) => values[key.trim()] || values[normalizeKey(key)] || '')
+            .replace(/[_\-\s]+/gu, '_')
+            .replace(/^[_\-\s]+|[_\-\s]+$/gu, '');
+    }
+
+    function renderFolder(template, values) {
+        const folder = renderTemplate(template, values);
+        if (!folder) return '';
+        return folder.split(/[\\/]+/u).map(part => sanitizePathPart(part, '')).filter(Boolean).join('/');
+    }
+
+    function uniquePath(path, used) {
+        path = path.replace(/\\/g, '/').replace(/^\/+/, '');
+        const slash = path.lastIndexOf('/');
+        const dir = slash >= 0 ? path.slice(0, slash + 1) : '';
+        const file = slash >= 0 ? path.slice(slash + 1) : path;
+        const dot = file.lastIndexOf('.');
+        const base = dot >= 0 ? file.slice(0, dot) : file;
+        const ext = dot >= 0 ? file.slice(dot) : '';
+        let candidate = path;
+        let index = 2;
+        while (used.has(candidate.toLowerCase())) {
+            candidate = `${dir}${base}-${index}${ext}`;
+            index++;
+        }
+        used.add(candidate.toLowerCase());
+        return candidate;
+    }
+
+    function csv(rows) {
+        const header = ['sheet', 'row', 'image_index', 'file_path', 'source_media', 'anchor'];
+        return [header, ...rows.map(row => header.map(key => row[key] ?? ''))]
+            .map(row => row.map(csvCell).join(','))
+            .join('\r\n');
+    }
+
+    function csvCell(value) {
+        const text = String(value);
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+
+    function saveBlob(blob, fileName) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+    }
+
+    function xml(text) {
+        const dom = new DOMParser().parseFromString(text, 'application/xml');
+        if (dom.getElementsByTagName('parsererror').length) {
+            throw new Error('xlsx XML 解析失败。');
+        }
+        return dom;
+    }
+
+    function nodes(root, localName) {
+        return Array.from(root?.getElementsByTagNameNS?.('*', localName) || []);
+    }
+
+    function firstText(root, localName) {
+        return nodes(root, localName)[0]?.textContent || '';
+    }
+
+    function resolvePath(baseFile, target) {
+        if (!target) return '';
+        if (target.startsWith('/')) return target.replace(/^\/+/, '');
+        const parts = `${baseFile.split('/').slice(0, -1).join('/')}/${target}`.split('/');
+        const out = [];
+        parts.forEach(part => {
+            if (!part || part === '.') return;
+            if (part === '..') out.pop();
+            else out.push(part);
+        });
+        return out.join('/');
+    }
+
+    function relsPath(path) {
+        const parts = path.split('/');
+        const file = parts.pop();
+        return `${parts.join('/')}/_rels/${file}.rels`;
+    }
+
+    function columnNumber(ref) {
+        const match = String(ref).match(/^([A-Z]+)/i);
+        if (!match) return 0;
+        return match[1].toUpperCase().split('').reduce((num, char) => num * 26 + char.charCodeAt(0) - 64, 0);
+    }
+
+    function columnLetters(col) {
+        let letters = '';
+        while (col > 0) {
+            col--;
+            letters = String.fromCharCode(65 + (col % 26)) + letters;
+            col = Math.floor(col / 26);
+        }
+        return letters || 'A';
+    }
+
+    function sanitizePathPart(value, fallback) {
+        const text = String(value || '')
+            .replace(/[<>:"/\\|?*\x00-\x1F]+/gu, '_')
+            .replace(/\s+/gu, ' ')
+            .replace(/^[ ._\-]+|[ ._\-]+$/gu, '')
+            .slice(0, 120);
+        return text || fallback;
+    }
+
+    function normalizeKey(key) {
+        return String(key || '').toLowerCase().replace(/[\s_：:\-]+/gu, '');
+    }
+
+    function containsAny(text, keywords) {
+        const haystack = String(text || '').toLowerCase();
+        return keywords.some(keyword => haystack.includes(String(keyword).toLowerCase()));
+    }
+
+    function hasAnyValue(row) {
+        if (!row) return false;
+        return [...row.values()].some(value => String(value || '').trim() !== '');
+    }
+
+    function safeImageExtension(extension) {
+        extension = String(extension || '').toLowerCase();
+        if (extension === 'jpeg') return 'jpg';
+        return ['jpg', 'png', 'gif', 'webp', 'bmp'].includes(extension) ? extension : 'jpg';
+    }
+
+    function imageMime(extension) {
+        extension = safeImageExtension(extension);
+        if (extension === 'jpg') return 'image/jpeg';
+        return `image/${extension}`;
+    }
+
+    function utf8Bytes(text) {
+        return new TextEncoder().encode(text);
+    }
+})();

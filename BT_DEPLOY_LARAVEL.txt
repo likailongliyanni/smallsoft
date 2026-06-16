@@ -1,0 +1,137 @@
+宝塔部署 Laravel 框架版步骤
+
+一、上传文件
+
+1. 在宝塔创建站点：tools.haobanfa.online
+2. 上传压缩包 webauto_laravel_commercial_v1.zip 到：
+   /www/wwwroot/tools.haobanfa.online
+3. 解压后确认目录里能看到：
+   app
+   bootstrap
+   config
+   database
+   public
+   resources
+   routes
+   composer.json
+   artisan
+   .env.example
+
+二、设置网站运行目录
+
+宝塔站点设置 -> 网站目录：
+
+网站目录：
+/www/wwwroot/tools.haobanfa.online
+
+运行目录：
+/public
+
+如果是 Nginx，伪静态填 Laravel：
+
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+三、创建数据库
+
+宝塔 -> 数据库 -> 添加数据库，例如：
+
+数据库名：tools_haobanfa
+用户名：tools_haobanfa
+密码：自己生成强密码
+
+四、配置 .env
+
+进入终端：
+
+cd /www/wwwroot/tools.haobanfa.online
+cp .env.example .env
+nano .env
+
+至少修改这些：
+
+APP_URL=https://tools.haobanfa.online
+DB_DATABASE=tools_haobanfa
+DB_USERNAME=tools_haobanfa
+DB_PASSWORD=你的数据库密码
+ADMIN_USERNAME=你的管理员账号
+ADMIN_PASSWORD=你的管理员强密码
+
+DeepSeek 可以先留空，部署完成后进入 /admin 后台配置：
+
+AI_PROVIDER=deepseek
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_API_KEY=
+
+五、安装依赖和迁移数据库
+
+优先使用宝塔 PHP 8.2：
+
+cd /www/wwwroot/tools.haobanfa.online
+/www/server/php/82/bin/php -v
+composer install --no-dev --optimize-autoloader
+/www/server/php/82/bin/php artisan key:generate
+/www/server/php/82/bin/php artisan migrate --force
+/www/server/php/82/bin/php artisan config:cache
+/www/server/php/82/bin/php artisan route:cache
+
+如果 composer 绑定的不是 PHP 8.2，可以尝试：
+
+/www/server/php/82/bin/php /usr/local/bin/composer install --no-dev --optimize-autoloader
+
+六、权限
+
+chown -R www:www /www/wwwroot/tools.haobanfa.online
+chmod -R 755 /www/wwwroot/tools.haobanfa.online
+chmod -R 775 /www/wwwroot/tools.haobanfa.online/storage
+chmod -R 775 /www/wwwroot/tools.haobanfa.online/bootstrap/cache
+
+七、检查
+
+curl https://tools.haobanfa.online/api/health
+
+正常返回：
+{"ok":true,"version":"0.2.0-laravel"}
+
+检查交互类型接口：
+
+curl https://tools.haobanfa.online/api/interaction-types
+
+然后访问：
+https://tools.haobanfa.online/
+https://tools.haobanfa.online/login
+https://tools.haobanfa.online/register
+https://tools.haobanfa.online/account
+https://tools.haobanfa.online/admin
+
+登录逻辑：
+
+普通用户从右上角“登录”进入后，会跳转到账号中心。
+管理员使用 .env 里的 ADMIN_USERNAME 和 ADMIN_PASSWORD 登录后，会进入管理后台。
+
+进入管理员后台后，先配置 DeepSeek：
+
+Base URL：https://api.deepseek.com
+模型：deepseek-v4-pro
+Thinking：开启
+Reasoning Effort：high
+API Key：填写你的 DeepSeek API Key
+
+保存后点击“测试模型”，返回 OK 说明 DeepSeek 已接通。
+
+八、更新版本
+
+小更新页面或 PHP 代码：
+覆盖 app、bootstrap、config、database、public、resources、routes、composer.json、artisan。
+
+不要覆盖：
+.env
+storage
+vendor
+
+如果新增了数据库迁移：
+/www/server/php/82/bin/php artisan migrate --force
+/www/server/php/82/bin/php artisan config:cache
+/www/server/php/82/bin/php artisan route:cache
