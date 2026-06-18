@@ -22,6 +22,7 @@ class DesktopDeviceController extends Controller
     {
         $data = $request->validate([
             'software_id' => ['required', 'string', 'max:60', 'regex:/^[A-Za-z0-9:_-]{8,60}$/'],
+            'legacy_id' => ['nullable', 'string', 'max:60', 'regex:/^[A-Za-z0-9:_-]{8,60}$/'],
             'app' => ['nullable', 'string', 'max:40'],
             'version' => ['nullable', 'string', 'max:20'],
         ]);
@@ -31,8 +32,9 @@ class DesktopDeviceController extends Controller
         $username = $this->normalizeSoftwareId($data['software_id']).'-'.$code;
         $defaultQuota = $this->defaultQuota($code);
         $name = (self::SOFTWARE_NAMES[$code] ?? '软件').' '.$username;
+        $legacyId = trim((string) ($data['legacy_id'] ?? ''));
 
-        $user = DB::transaction(function () use ($username, $code, $defaultQuota, $name): User {
+        $user = DB::transaction(function () use ($username, $code, $defaultQuota, $name, $legacyId): User {
             $existing = User::where('username', $username)->lockForUpdate()->first();
             if ($existing) {
                 $update = ['last_login_at' => now()];
@@ -42,6 +44,24 @@ class DesktopDeviceController extends Controller
                 $existing->update($update);
 
                 return $existing->fresh();
+            }
+
+            // 老编号迁移：新编号首次登记、但旧编号已有账户 → 把旧账户改名到新编号，
+            // 额度/付费/记录全部无缝保留。迁移后旧编号不再存在，配置即便被拷到别的电脑也不会重复迁移。
+            if ($legacyId !== '') {
+                $legacyUsername = $this->normalizeSoftwareId($legacyId).'-'.$code;
+                if ($legacyUsername !== $username) {
+                    $old = User::where('username', $legacyUsername)->lockForUpdate()->first();
+                    if ($old) {
+                        $old->update([
+                            'username' => $username,
+                            'software_code' => $code,
+                            'last_login_at' => now(),
+                        ]);
+
+                        return $old->fresh();
+                    }
+                }
             }
 
             $user = User::create([

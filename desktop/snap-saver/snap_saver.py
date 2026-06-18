@@ -410,24 +410,49 @@ def _server_error_from_body(body: str, fallback: str) -> str:
         return (text or fallback)[:300]
 
 
+def _robust_mac() -> str:
+    """取本机真实网卡 MAC（12 位大写十六进制）。
+
+    优先用 getmac 列举网卡取稳定的物理地址，取不到再回退 uuid.getnode()。
+    比单用 getnode() 可靠：getnode() 打包成 exe 后取不到真实网卡时会返回随机数，
+    多网卡时还可能每次返回不同值。
+    """
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["getmac", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW，不弹黑框
+        ).stdout
+        macs = []
+        for token in re.findall(r'([0-9A-Fa-f]{2}(?:[-:][0-9A-Fa-f]{2}){5})', out):
+            hexv = re.sub(r'[^0-9A-Fa-f]', '', token).upper()
+            if len(hexv) == 12 and hexv != "000000000000":
+                macs.append(hexv)
+        if macs:
+            return sorted(set(macs))[0]  # 排序取最小，保证同一台机器每次稳定
+    except Exception:
+        pass
+    return f"{uuid.getnode():012X}"
+
+
 def local_software_id() -> str:
-    # 软件编号：MAC + 主机名 + CPU + 系统 + 软件名 做 SHA256，取前 5 段。
-    # - 哈希不可逆，不直接暴露用户 MAC；
-    # - 末尾加软件名「snap-saver」，使同一台机器上本软件的编号与自动化软件不同，
-    #   充值时服务器/客服能区分是给哪个软件充。改这里的软件名会改变编号，勿动。
-    mac = uuid.getnode()
-    raw = f"{mac}-{platform.node()}-{platform.processor()}-{platform.system()}-snap-saver"
-    digest = hashlib.sha256(raw.encode()).hexdigest().upper()
-    parts = [digest[i:i + 4] for i in range(0, 20, 4)]
-    return "-".join(parts)
+    # 软件编号 = 本机真实网卡 MAC（明文 12 位十六进制）。
+    # 软件类别（截图=pic）由登记时上报的 app 字段在服务器端区分，编号本身只放 MAC。
+    # 每次启动按本机网卡「实时计算」，不从配置文件读旧值——
+    # 否则把软件目录（含配置）拷到别的电脑，旧编号会被带过去，导致多台电脑同一个序列号。
+    return _robust_mac()
 
 
-def server_register_device(server_url: str, software_id: str) -> dict:
-    payload = json.dumps({
+def server_register_device(server_url: str, software_id: str, legacy_id: str = "") -> dict:
+    body = {
         "software_id": software_id,
         "app": "snap-saver",
         "version": APP_VERSION,
-    }).encode("utf-8")
+    }
+    if legacy_id and legacy_id != software_id:
+        body["legacy_id"] = legacy_id
+    payload = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
         normalize_server_url(server_url) + "/api/desktop/device/register", data=payload, method="POST")
     request.add_header("Content-Type", "application/json")
@@ -1629,7 +1654,10 @@ class SnapSaverApp:
         self.review_mode_label = repair_mode_label(DEFAULT_REPAIR_MODE)
 
         self.server_url_var = tk.StringVar(value=str(config.get("server_url") or os.environ.get("HAOBANFA_SERVER_URL", DEFAULT_SERVER_URL)))
-        self.software_id_var = tk.StringVar(value=str(config.get("software_id") or local_software_id()))
+        # 编号每次按本机网卡实时算，不读配置里的旧值（防止拷贝软件目录导致多机同号）；
+        # 旧编号仅留作一次性迁移上报，让老用户的额度平滑过渡到新编号。
+        self.software_id_var = tk.StringVar(value=local_software_id())
+        self.legacy_software_id = str(config.get("software_id") or "").strip()
         self.server_token = str(config.get("server_token") or os.environ.get("HAOBANFA_TOKEN", "")).strip()
         self.output_dir_var = tk.StringVar(value=str(Path(saved_out) if saved_out else app_dir() / "存图结果"))
         self.main_count_var = tk.IntVar(value=int(config.get("main_count", 1) or 1))
@@ -1882,8 +1910,9 @@ class SnapSaverApp:
 
     def register_device(self, silent: bool = False) -> bool:
         software_id = self.software_id_var.get().strip()
+        legacy_id = getattr(self, "legacy_software_id", "")
         try:
-            data = server_register_device(self.server_url_var.get(), software_id)
+            data = server_register_device(self.server_url_var.get(), software_id, legacy_id)
         except ServerApiError as exc:
             self.device_state_var.set("设备：登记失败")
             self.log(f"软件编号登记失败：{exc}")
@@ -1893,6 +1922,8 @@ class SnapSaverApp:
         self.server_token = str(data.get("token") or "").strip()
         self.device_state_var.set("设备：已登记")
         self._set_quota_from_response(data)
+        # 迁移已完成，清掉旧编号，避免配置被拷到别的电脑时重复触发迁移
+        self.legacy_software_id = ""
         save_config({
             "server_url": normalize_server_url(self.server_url_var.get()),
             "software_id": software_id,
