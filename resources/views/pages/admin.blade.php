@@ -179,10 +179,8 @@
                 </div>
 
                 <div class="panel" style="margin-bottom:14px">
-                    <form id="userSearchForm" class="form form-inline-quota">
-                        <label style="flex:1">搜索（序列号 / 昵称 / 账号 / 邮箱 / 手机）
-                            <input name="q" id="userSearchInput" placeholder="输入关键词回车搜索，留空显示全部">
-                        </label>
+                    <form id="userSearchForm" class="user-search-bar">
+                        <input name="q" id="userSearchInput" placeholder="搜索：序列号 / 昵称 / 账号 / 邮箱 / 手机（回车或点搜索）">
                         <button class="btn btn-sm" type="submit">搜索</button>
                         <button class="btn btn-sm btn-outline" type="button" id="userSearchClear">清空</button>
                     </form>
