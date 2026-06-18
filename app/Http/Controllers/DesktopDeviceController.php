@@ -28,6 +28,15 @@ class DesktopDeviceController extends Controller
         ]);
 
         $code = $this->softwareCode($data['app'] ?? '');
+
+        // 截图软件强制最新版：新版编号是 12 位网卡 MAC，旧版发的是 20 位哈希编号。
+        // 旧版登记一律拒绝并提示下载新版（旧软件作废）。其它软件（如自动化）不受此限制。
+        $appText = strtolower(trim((string) ($data['app'] ?? '')));
+        $isSnap = str_contains($appText, 'snap') || str_contains($appText, 'pic')
+            || str_contains($appText, 'shot') || str_contains($appText, '截图');
+        $rawHex = preg_replace('/[^A-Fa-f0-9]/', '', $data['software_id']) ?? '';
+        abort_if($isSnap && strlen($rawHex) !== 12, 426, '截图软件版本过旧，请下载并使用最新版。');
+
         // username = 设备编号 + 软件代码，使不同软件即便编号相同也分开管理
         $username = $this->normalizeSoftwareId($data['software_id']).'-'.$code;
         $defaultQuota = $this->defaultQuota($code);
