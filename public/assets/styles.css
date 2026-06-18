@@ -3013,3 +3013,28 @@ body[data-page="excel-automation"] .site-footer {
     line-height: 1.8;
     white-space: pre-wrap;
 }
+
+/* ---------- 后台用户管理 · 软件筛选标签 ---------- */
+.soft-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+.soft-tab {
+    border: 1px solid #d5dde8;
+    background: #ffffff;
+    color: #334155;
+    border-radius: 999px;
+    padding: 5px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.soft-tab:hover { background: #f1f5f9; }
+.soft-tab.active {
+    border-color: #16a34a;
+    background: #16a34a;
+    color: #ffffff;
+    font-weight: 600;
+}

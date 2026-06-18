@@ -186,6 +186,7 @@
                         <button class="btn btn-sm" type="submit">搜索</button>
                         <button class="btn btn-sm btn-outline" type="button" id="userSearchClear">清空</button>
                     </form>
+                    <div id="userSoftwareTabs" class="soft-tabs"></div>
                 </div>
 
                 <div class="panel">
@@ -209,7 +210,7 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>ID</th><th>账号(序列号)</th><th>昵称</th><th>状态</th>
+                                    <th>ID</th><th>账号(序列号)</th><th>软件</th><th>昵称</th><th>状态</th>
                                     <th>免费</th><th>付费</th><th>注册时间</th>
                                 </tr>
                             </thead>

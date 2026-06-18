@@ -397,31 +397,65 @@ function initAdmin() {
         });
     }
 
+    const SOFT_NAMES = { pic: '截图/图片软件', auto: '自动化软件' };
+    let userQuery = '';
+    let userSoftware = '';  // '' 全部；'_none' 未分类；其余=软件代码
+
+    function softLabel(code) {
+        if (!code) return '<span class="muted">未分类</span>';
+        return escapeHtml(SOFT_NAMES[code] || code);
+    }
+
+    function renderSoftwareTabs(counts) {
+        const el = $('#userSoftwareTabs');
+        if (!el) return;
+        const total = Object.values(counts).reduce((a, b) => a + Number(b), 0);
+        const tabs = [['', '全部', total]];
+        for (const code of ['pic', 'auto']) {
+            if (counts[code]) tabs.push([code, SOFT_NAMES[code], counts[code]]);
+        }
+        if (counts['']) tabs.push(['_none', '未分类', counts['']]);
+        el.innerHTML = tabs.map(([code, label, c]) => {
+            const active = (userSoftware === code) || (code === '' && !userSoftware);
+            return `<button type="button" class="soft-tab${active ? ' active' : ''}" data-soft="${code}">${escapeHtml(label)} (${c})</button>`;
+        }).join('');
+        el.querySelectorAll('.soft-tab').forEach(b => b.addEventListener('click', () => {
+            userSoftware = b.dataset.soft;
+            loadUsers(userQuery);
+        }));
+    }
+
     async function loadUsers(q = '') {
-        const url = q ? `/api/admin/users?q=${encodeURIComponent(q)}` : '/api/admin/users';
-        const response = await api(url);
+        userQuery = q;
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (userSoftware) params.set('software', userSoftware);
+        const qs = params.toString();
+        const response = await api('/api/admin/users' + (qs ? `?${qs}` : ''));
+        renderSoftwareTabs(response.software_counts || {});
         const list = response.users || [];
         $('#usersTable').innerHTML = list.map(user => `
             <tr>
                 <td>${user.id}</td>
                 <td><code style="font-size:11px">${escapeHtml(user.username)}</code></td>
+                <td>${softLabel(user.software_code)}</td>
                 <td>${escapeHtml(user.nickname || '-')} ${user.nickname_edit_count >= 3 ? '<span class="fb-status closed" style="font-size:10px">🔒</span>' : ''}</td>
                 <td>${escapeHtml(user.status)}</td>
                 <td>${user.free_generations}</td>
                 <td>${user.paid_generations}</td>
                 <td>${formatTime(user.created_at)}</td>
             </tr>
-        `).join('') || `<tr><td colspan="7" class="empty">${q ? '未找到匹配用户' : '暂无用户'}</td></tr>`;
+        `).join('') || `<tr><td colspan="8" class="empty">${q ? '未找到匹配用户' : '暂无用户'}</td></tr>`;
     }
 
     // 搜索绑定
     $('#userSearchForm')?.addEventListener('submit', async e => {
         e.preventDefault();
-        const q = $('#userSearchInput').value.trim();
-        await loadUsers(q);
+        await loadUsers($('#userSearchInput').value.trim());
     });
     $('#userSearchClear')?.addEventListener('click', async () => {
         $('#userSearchInput').value = '';
+        userSoftware = '';
         await loadUsers('');
     });
 

@@ -87,8 +87,21 @@ class AdminController extends Controller
         $this->requireAdmin($request, $tokens);
 
         $q = trim((string) $request->query('q', ''));
+        $software = trim((string) $request->query('software', ''));
+
+        // 各软件用户数（含未分类），供前端做筛选标签
+        $softwareCounts = User::where('role', 'user')
+            ->selectRaw("COALESCE(software_code, '') as code, COUNT(*) as c")
+            ->groupBy('software_code')
+            ->pluck('c', 'code')
+            ->toArray();
 
         $query = User::where('role', 'user');
+        if ($software === '_none') {
+            $query->whereNull('software_code');
+        } elseif ($software !== '') {
+            $query->where('software_code', $software);
+        }
         if ($q !== '') {
             $query->where(function ($qb) use ($q) {
                 $qb->where('username', 'like', "%{$q}%")
@@ -104,6 +117,7 @@ class AdminController extends Controller
             ->get([
                 'id',
                 'username',
+                'software_code',
                 'name',
                 'nickname',
                 'nickname_edit_count',
@@ -119,6 +133,8 @@ class AdminController extends Controller
         return $this->ok([
             'users' => $users->toArray(),
             'query' => $q,
+            'software' => $software,
+            'software_counts' => $softwareCounts,
             'total' => $users->count(),
         ]);
     }
