@@ -1023,6 +1023,51 @@ class SelectionBoxWindow(tk.Toplevel):
 
 # ---------------- 工作浮窗 ----------------
 
+class FreePanel(tk.Toplevel):
+    """自由截图模式的置顶小浮窗：显示已截数量 + 打开目录 / 结束 / 显示主程序。"""
+
+    def __init__(self, owner):
+        super().__init__(owner.root)
+        self.owner = owner
+        self.title("自由截图")
+        self.attributes("-topmost", True)
+        self.resizable(False, False)
+        self.configure(bg=COLOR_BG)
+        self.protocol("WM_DELETE_WINDOW", owner.stop_free)
+
+        frame = tk.Frame(self, bg=COLOR_CARD, padx=14, pady=12,
+                         highlightbackground="#c9d7cf", highlightthickness=1)
+        frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        frame.columnconfigure(0, weight=1, uniform="half")
+        frame.columnconfigure(1, weight=1, uniform="half")
+
+        tk.Label(frame, text="●  自由截图中", bg=COLOR_CARD, fg=COLOR_GREEN,
+                 font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(frame, textvariable=owner.free_count_var, bg=COLOR_CARD, fg=COLOR_TEXT,
+                 font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+        tk.Label(frame, text="按住 Ctrl + 鼠标拖动框选，松开自动保存", bg=COLOR_CARD, fg=COLOR_MUTED,
+                 font=("Microsoft YaHei UI", 9), anchor="w", wraplength=230, justify="left").grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        tk.Button(frame, text="打开目录", command=owner.open_free_dir,
+                  bg="#eef3f0", fg=COLOR_TEXT, bd=0, relief="flat", cursor="hand2",
+                  font=("Microsoft YaHei UI", 10), padx=10, pady=8).grid(
+            row=3, column=0, sticky="ew", padx=(0, 4))
+        tk.Button(frame, text="结束自由截图", command=owner.stop_free,
+                  bg=COLOR_GREEN, fg="#ffffff", activebackground=COLOR_GREEN_DARK,
+                  activeforeground="#ffffff", bd=0, relief="flat", cursor="hand2",
+                  font=("Microsoft YaHei UI", 10, "bold"), padx=10, pady=8).grid(
+            row=3, column=1, sticky="ew", padx=(4, 0))
+        tk.Button(frame, text="显示主程序", command=owner.show_main,
+                  bg="#eef3f0", fg=COLOR_TEXT, bd=0, relief="flat", cursor="hand2",
+                  font=("Microsoft YaHei UI", 9), padx=10, pady=6).grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        self.geometry(f"+{sw - self.winfo_width() - 40}+60")
+
+
 class FloatPanel(tk.Toplevel):
     def __init__(self, owner):
         super().__init__(owner.root)
@@ -1660,6 +1705,10 @@ class SnapSaverApp:
         self.legacy_software_id = str(config.get("software_id") or "").strip()
         self.server_token = str(config.get("server_token") or os.environ.get("HAOBANFA_TOKEN", "")).strip()
         self.output_dir_var = tk.StringVar(value=str(Path(saved_out) if saved_out else app_dir() / "存图结果"))
+        self.free_count_var = tk.StringVar(value="本次自由截图：0 张")
+        self.free_mode = False
+        self.free_count = 0
+        self.free_panel = None
         self.main_count_var = tk.IntVar(value=int(config.get("main_count", 1) or 1))
         self.detail_count_var = tk.IntVar(value=int(config.get("detail_count", 3) or 3))
         self.prefix_var = tk.StringVar(value=str(config.get("prefix", "pic")))
@@ -1817,6 +1866,8 @@ class SnapSaverApp:
         self.start_button.grid(row=0, column=5)
         self.stop_button = ttk.Button(toolbar, text="结束截图", command=self.stop_work, state="disabled")
         self.stop_button.grid(row=0, column=6, padx=(6, 0))
+        self.free_button = ttk.Button(toolbar, text="自由截图", command=self.start_free)
+        self.free_button.grid(row=0, column=7, padx=(6, 0))
         # 右侧修复区
         ttk.Label(toolbar, text="修复类型").grid(row=0, column=8, padx=(0, 6))
         self.repair_mode_combo = ttk.Combobox(
@@ -2217,6 +2268,100 @@ class SnapSaverApp:
         self.refresh_tree()
         self.set_status(f"已结束截图。本次共 {len(self.captures)} 张，可点「AI 智能修复」处理图片。")
 
+    # ---------------- 自由截图模式（不绑列表，自己开网页/程序随手截图） ----------------
+
+    def start_free(self):
+        if self.work_mode:
+            messagebox.showinfo(APP_NAME, "请先结束商品采集，再使用自由截图。", parent=self.root)
+            return
+        if self.free_mode:
+            self.stop_free()
+            return
+        save_config({"output_dir": self.output_dir_var.get(), "quality": int(self.quality_var.get() or 95)})
+
+        self.selection_box = SelectionBoxWindow(self.root)
+        ok = False
+        try:
+            ok = self.hook.install()
+        except Exception as exc:
+            self.log(f"启用 Ctrl 拖动失败：{exc}")
+        if not ok:
+            self.hook_state_var.set("● Ctrl 拖动截图：启用失败")
+            self.log(f"Ctrl 拖动启用失败：{self.hook.last_error or '可能被安全软件拦截'}。")
+            messagebox.showwarning(APP_NAME, "截图功能启用失败，可能被安全软件拦截。\n"
+                                             "请在安全软件里允许本程序后重试。", parent=self.root)
+            if self.selection_box is not None:
+                try:
+                    self.selection_box.destroy()
+                except tk.TclError:
+                    pass
+                self.selection_box = None
+            return
+
+        self.free_mode = True
+        self.free_count = 0
+        self.free_count_var.set("本次自由截图：0 张")
+        self.hook_polling = True
+        self.root.after(15, self.poll_hook)
+        self.hook_state_var.set("● 自由截图中：按住 Ctrl 拖动")
+        self.free_button.configure(text="结束自由截图")
+        self.start_button.configure(state="disabled")
+        self.free_panel = FreePanel(self)
+        self.hide_main()
+        self.set_status("自由截图已开启：到任意网页/程序，按住 Ctrl 拖动框选，自动存到「自由截图」。")
+        self.log("自由截图已开启，按住 Ctrl 拖动鼠标截图。")
+
+    def stop_free(self, _event=None):
+        if not self.free_mode:
+            return
+        self.free_mode = False
+        self.hook_polling = False
+        try:
+            self.hook.uninstall()
+        except Exception:
+            pass
+        if self.selection_box is not None:
+            try:
+                self.selection_box.destroy()
+            except tk.TclError:
+                pass
+            self.selection_box = None
+        if self.free_panel is not None:
+            try:
+                self.free_panel.destroy()
+            except tk.TclError:
+                pass
+            self.free_panel = None
+        self.hook_state_var.set("")
+        self.free_button.configure(text="自由截图")
+        self.start_button.configure(state="normal")
+        self.show_main()
+        self.set_status(f"自由截图已结束，本次共 {self.free_count} 张，存在「自由截图」文件夹。")
+
+    def open_free_dir(self):
+        path = Path(self.output_dir_var.get()) / "自由截图"
+        path.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            self.log(f"打开目录失败：{exc}")
+
+    def _save_free_capture(self, image):
+        target_dir = Path(self.output_dir_var.get()) / "自由截图"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        target = target_dir / f"截图_{stamp}.jpg"
+        index = 2
+        while target.exists():
+            target = target_dir / f"截图_{stamp}-{index}.jpg"
+            index += 1
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(target, "JPEG", quality=int(self.quality_var.get() or 95))
+        self.free_count += 1
+        self.free_count_var.set(f"本次自由截图：{self.free_count} 张")
+        self.log(f"已存：自由截图/{target.name}（{image.width}x{image.height}）")
+
     def current_row(self):
         if 0 <= self.current_index < len(self.rows):
             return self.rows[self.current_index]
@@ -2340,6 +2485,9 @@ class SnapSaverApp:
             write_error_log(f"截图失败：{exc}")
 
     def save_capture(self, image):
+        if self.free_mode:
+            self._save_free_capture(image)
+            return
         row = self.current_row()
         if not row:
             self.log("没有当前行，截图忽略。")
