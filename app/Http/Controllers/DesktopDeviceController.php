@@ -137,21 +137,23 @@ class DesktopDeviceController extends Controller
     private function defaultQuota(string $code): int
     {
         return match ($code) {
-            'auto' => (int) config('platform.auto_default_quota', config('platform.snap_saver_default_quota', 50)),
-            default => (int) config('platform.snap_saver_default_quota', 50),
+            'auto' => (int) config('platform.auto_default_quota', config('platform.snap_saver_default_quota', 10)),
+            default => (int) config('platform.snap_saver_default_quota', 10),
         };
     }
 
-    /** 设备编号归一化：十六进制取前 12 位格式化成 MAC 样式；其它形式原样大写保留。 */
+    /**
+     * 设备编号归一化：含 ≥12 位十六进制的编号统一取前 12 位格式化成 XX-XX-XX-XX-XX-XX。
+     * 旧版客户端的哈希编号、新版的真实 MAC 都按同一规则归一，与历史数据迁移后的 username
+     * 保持一致——所以旧软件继续登记也能对上原账户，不受影响。
+     */
     private function normalizeSoftwareId(string $value): string
     {
-        $raw = strtoupper(trim($value));
-        $hex = preg_replace('/[^A-F0-9]/', '', $raw) ?? '';
-        if (strlen($hex) >= 12 && strlen($hex) === strlen(preg_replace('/[^A-F0-9-]/', '', $raw))) {
-            // 纯十六进制（含分隔符）的编号 → 取前 12 位做 MAC 样式
+        $hex = strtoupper(preg_replace('/[^A-Fa-f0-9]/', '', $value) ?? '');
+        if (strlen($hex) >= 12) {
             return implode('-', str_split(substr($hex, 0, 12), 2));
         }
 
-        return $raw;
+        return strtoupper(trim($value));
     }
 }
