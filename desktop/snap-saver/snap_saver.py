@@ -1053,76 +1053,94 @@ def _wrap_text(draw, text, font, max_width):
     return lines
 
 
-def render_doc_card(image, caption, index=None, width=1000):
-    """单张截图卡片：图（按宽缩放）+ 下方序号说明。返回白底 RGB Image。"""
-    pad = 40
-    inner = width - pad * 2
+def _doc_target_width(items, cap_min=1100, cap_max=2400):
+    """内容区目标宽度：取所有图最大宽度（限制在 1100~2400），避免把高清截图降采样糊掉。"""
+    if not items:
+        return cap_min
+    return max(cap_min, min(cap_max, max(im.width for im, _ in items)))
+
+
+def render_doc_card(image, caption, index, target_inner, scale):
+    """单张截图卡片：图 + 下方序号说明。宽度差异 ≤20% 的图等比对齐到 target_inner，
+    明显更窄的保持原始尺寸居中（不放大，免得糊）。所有排版尺寸随 scale 等比，保证清晰。"""
+    pad = round(40 * scale)
     img = image.convert("RGB")
-    if img.width != inner:
-        new_h = max(1, round(img.height * inner / img.width))
-        img = img.resize((inner, new_h), Image.LANCZOS)
-    cap_font = _doc_font(26)
+    w = img.width
+    if w > target_inner or w >= target_inner * 0.8:
+        new_w = target_inner
+        new_h = max(1, round(img.height * new_w / w))
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+    card_w = target_inner + pad * 2
+    x = (card_w - img.width) // 2
+    cap_font = _doc_font(max(22, round(28 * scale)))
+    line_h = max(30, round(40 * scale))
     measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
     text = ((f"{index}. " if index else "") + str(caption or "").strip()).strip()
-    cap_lines = _wrap_text(measure, text, cap_font, inner) if text else []
-    line_h = 40
-    cap_block = (16 + len(cap_lines) * line_h) if cap_lines else 0
-    card = Image.new("RGB", (width, pad + img.height + cap_block + pad), "white")
-    card.paste(img, (pad, pad))
+    cap_lines = _wrap_text(measure, text, cap_font, target_inner) if text else []
+    cap_block = (round(16 * scale) + len(cap_lines) * line_h) if cap_lines else 0
+    card = Image.new("RGB", (card_w, pad + img.height + cap_block + pad), "white")
+    card.paste(img, (x, pad))
     if cap_lines:
         draw = ImageDraw.Draw(card)
-        y = pad + img.height + 16
+        y = pad + img.height + round(16 * scale)
         for ln in cap_lines:
             draw.text((pad, y), ln, fill="#222222", font=cap_font)
             y += line_h
     return card
 
 
-def render_doc_title(title, intro, width=1000):
-    pad = 40
-    inner = width - pad * 2
-    t_font = _doc_font(44)
-    i_font = _doc_font(24)
+def render_doc_title(title, intro, target_inner, scale):
+    pad = round(40 * scale)
+    card_w = target_inner + pad * 2
+    t_font = _doc_font(max(34, round(46 * scale)))
+    i_font = _doc_font(max(20, round(24 * scale)))
+    t_lh = max(46, round(60 * scale))
+    i_lh = max(30, round(36 * scale))
     measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
-    t_lines = _wrap_text(measure, title or "使用说明", t_font, inner)
-    i_lines = _wrap_text(measure, intro, i_font, inner) if str(intro or "").strip() else []
-    height = pad + len(t_lines) * 58 + (24 + len(i_lines) * 36 if i_lines else 0) + pad
-    page = Image.new("RGB", (width, max(height, 180)), "white")
+    t_lines = _wrap_text(measure, title or "使用说明", t_font, target_inner)
+    i_lines = _wrap_text(measure, intro, i_font, target_inner) if str(intro or "").strip() else []
+    height = pad + len(t_lines) * t_lh + (round(24 * scale) + len(i_lines) * i_lh if i_lines else 0) + pad
+    page = Image.new("RGB", (card_w, max(height, round(180 * scale))), "white")
     draw = ImageDraw.Draw(page)
     y = pad
     for ln in t_lines:
         draw.text((pad, y), ln, fill="#0b1f16", font=t_font)
-        y += 58
-    y += 24
+        y += t_lh
+    y += round(24 * scale)
     for ln in i_lines:
         draw.text((pad, y), ln, fill="#444444", font=i_font)
-        y += 36
+        y += i_lh
     return page
 
 
-def build_doc_pages(title, intro, items, width=1000):
+def build_doc_pages(title, intro, items):
     """items: [(PIL.Image, caption)]，返回 [标题页, 卡片1, 卡片2, ...]。"""
-    pages = [render_doc_title(title, intro, width)]
+    target = _doc_target_width(items)
+    scale = target / 1000.0
+    pages = [render_doc_title(title, intro, target, scale)]
     for i, (img, cap) in enumerate(items, 1):
-        pages.append(render_doc_card(img, cap, i, width))
+        pages.append(render_doc_card(img, cap, i, target, scale))
     return pages
 
 
-def build_long_image(title, intro, items, width=1000):
-    pages = build_doc_pages(title, intro, items, width)
+def build_long_image(title, intro, items):
+    pages = build_doc_pages(title, intro, items)
+    width = max(p.width for p in pages)
     gap = 18
     total_h = sum(p.height for p in pages) + gap * (len(pages) - 1) + 40
     out = Image.new("RGB", (width, total_h), "#eef2ef")
     y = 20
     for p in pages:
-        out.paste(p, (0, y))
+        out.paste(p, ((width - p.width) // 2, y))
         y += p.height + gap
     return out
 
 
-def build_doc_pdf(path, title, intro, items, width=1000):
-    pages = build_doc_pages(title, intro, items, width)
-    pages[0].save(str(path), "PDF", save_all=True, append_images=pages[1:], resolution=150.0)
+def build_doc_pdf(path, title, intro, items):
+    pages = build_doc_pages(title, intro, items)
+    # quality=95 + 不降采样，避免 PIL 存 PDF 时把截图压糊
+    pages[0].save(str(path), "PDF", save_all=True, append_images=pages[1:],
+                  resolution=150.0, quality=95)
 
 
 class ExportDocWindow(tk.Toplevel):
