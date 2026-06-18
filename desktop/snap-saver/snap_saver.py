@@ -37,7 +37,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageTk
 
 
 APP_NAME = "智能截图软件"
@@ -1023,6 +1023,286 @@ class SelectionBoxWindow(tk.Toplevel):
 
 # ---------------- 工作浮窗 ----------------
 
+# ---------------- 多图整理成文档（长图 / PDF，可配说明） ----------------
+
+def _doc_font(size: int):
+    for path in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc",
+                 r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap_text(draw, text, font, max_width):
+    """按像素宽度把文本（含中文）折行。"""
+    lines = []
+    for para in str(text).split("\n"):
+        if para == "":
+            lines.append("")
+            continue
+        cur = ""
+        for ch in para:
+            if draw.textlength(cur + ch, font=font) <= max_width or not cur:
+                cur += ch
+            else:
+                lines.append(cur)
+                cur = ch
+        lines.append(cur)
+    return lines
+
+
+def render_doc_card(image, caption, index=None, width=1000):
+    """单张截图卡片：图（按宽缩放）+ 下方序号说明。返回白底 RGB Image。"""
+    pad = 40
+    inner = width - pad * 2
+    img = image.convert("RGB")
+    if img.width != inner:
+        new_h = max(1, round(img.height * inner / img.width))
+        img = img.resize((inner, new_h), Image.LANCZOS)
+    cap_font = _doc_font(26)
+    measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    text = ((f"{index}. " if index else "") + str(caption or "").strip()).strip()
+    cap_lines = _wrap_text(measure, text, cap_font, inner) if text else []
+    line_h = 40
+    cap_block = (16 + len(cap_lines) * line_h) if cap_lines else 0
+    card = Image.new("RGB", (width, pad + img.height + cap_block + pad), "white")
+    card.paste(img, (pad, pad))
+    if cap_lines:
+        draw = ImageDraw.Draw(card)
+        y = pad + img.height + 16
+        for ln in cap_lines:
+            draw.text((pad, y), ln, fill="#222222", font=cap_font)
+            y += line_h
+    return card
+
+
+def render_doc_title(title, intro, width=1000):
+    pad = 40
+    inner = width - pad * 2
+    t_font = _doc_font(44)
+    i_font = _doc_font(24)
+    measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    t_lines = _wrap_text(measure, title or "使用说明", t_font, inner)
+    i_lines = _wrap_text(measure, intro, i_font, inner) if str(intro or "").strip() else []
+    height = pad + len(t_lines) * 58 + (24 + len(i_lines) * 36 if i_lines else 0) + pad
+    page = Image.new("RGB", (width, max(height, 180)), "white")
+    draw = ImageDraw.Draw(page)
+    y = pad
+    for ln in t_lines:
+        draw.text((pad, y), ln, fill="#0b1f16", font=t_font)
+        y += 58
+    y += 24
+    for ln in i_lines:
+        draw.text((pad, y), ln, fill="#444444", font=i_font)
+        y += 36
+    return page
+
+
+def build_doc_pages(title, intro, items, width=1000):
+    """items: [(PIL.Image, caption)]，返回 [标题页, 卡片1, 卡片2, ...]。"""
+    pages = [render_doc_title(title, intro, width)]
+    for i, (img, cap) in enumerate(items, 1):
+        pages.append(render_doc_card(img, cap, i, width))
+    return pages
+
+
+def build_long_image(title, intro, items, width=1000):
+    pages = build_doc_pages(title, intro, items, width)
+    gap = 18
+    total_h = sum(p.height for p in pages) + gap * (len(pages) - 1) + 40
+    out = Image.new("RGB", (width, total_h), "#eef2ef")
+    y = 20
+    for p in pages:
+        out.paste(p, (0, y))
+        y += p.height + gap
+    return out
+
+
+def build_doc_pdf(path, title, intro, items, width=1000):
+    pages = build_doc_pages(title, intro, items, width)
+    pages[0].save(str(path), "PDF", save_all=True, append_images=pages[1:], resolution=150.0)
+
+
+class ExportDocWindow(tk.Toplevel):
+    """把多张截图整理成「带说明的长图 / PDF」使用文档。"""
+
+    def __init__(self, owner):
+        super().__init__(owner.root)
+        self.owner = owner
+        self.title("整理成文档（长图 / PDF）")
+        self.geometry("780x660")
+        self.minsize(700, 560)
+        self.transient(owner.root)
+        self.configure(bg=COLOR_BG)
+        self.items = []        # [{path, caption, _entry}]
+        self.thumb_refs = []
+
+        top = tk.Frame(self, bg=COLOR_BG)
+        top.pack(fill="x", padx=14, pady=(12, 6))
+        tk.Label(top, text="文档标题", bg=COLOR_BG, anchor="w").pack(fill="x")
+        self.title_var = tk.StringVar(value="使用说明")
+        tk.Entry(top, textvariable=self.title_var).pack(fill="x", pady=(2, 8))
+        tk.Label(top, text="整体说明（可选，显示在文档开头）", bg=COLOR_BG, anchor="w").pack(fill="x")
+        self.intro_text = tk.Text(top, height=3, wrap="word")
+        self.intro_text.pack(fill="x", pady=(2, 0))
+
+        bar = tk.Frame(self, bg=COLOR_BG)
+        bar.pack(fill="x", padx=14, pady=8)
+        tk.Button(bar, text="添加图片", command=self.add_images).pack(side="left")
+        tk.Button(bar, text="加载「自由截图」", command=self.load_free_dir).pack(side="left", padx=(8, 0))
+        tk.Button(bar, text="清空", command=self.clear_items).pack(side="left", padx=(8, 0))
+        self.count_label = tk.Label(bar, text="共 0 张", bg=COLOR_BG, fg=COLOR_MUTED)
+        self.count_label.pack(side="right")
+
+        mid = tk.Frame(self, bg=COLOR_BG)
+        mid.pack(fill="both", expand=True, padx=14)
+        canvas = tk.Canvas(mid, bg=COLOR_BG, highlightthickness=0)
+        scroll = ttk.Scrollbar(mid, orient="vertical", command=canvas.yview)
+        self.list_frame = tk.Frame(canvas, bg=COLOR_BG)
+        self.list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.list_frame, anchor="nw", width=720)
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        bottom = tk.Frame(self, bg=COLOR_BG)
+        bottom.pack(fill="x", padx=14, pady=12)
+        self.status_var = tk.StringVar(value="添加截图 → 给每张填一句说明 → 导出长图或 PDF。")
+        tk.Label(bottom, textvariable=self.status_var, bg=COLOR_BG, fg=COLOR_GREEN, anchor="w").pack(fill="x", pady=(0, 8))
+        tk.Button(bottom, text="导出长图", command=self.export_long, bg=COLOR_GREEN, fg="#ffffff",
+                  bd=0, relief="flat", cursor="hand2", padx=16, pady=8,
+                  font=("Microsoft YaHei UI", 10, "bold")).pack(side="right")
+        tk.Button(bottom, text="导出 PDF", command=self.export_pdf, bg=COLOR_GREEN, fg="#ffffff",
+                  bd=0, relief="flat", cursor="hand2", padx=16, pady=8,
+                  font=("Microsoft YaHei UI", 10, "bold")).pack(side="right", padx=(0, 8))
+        self.render_list()
+
+    def _sync_captions(self):
+        for it in self.items:
+            entry = it.get("_entry")
+            if entry is not None:
+                try:
+                    it["caption"] = entry.get()
+                except tk.TclError:
+                    pass
+
+    def add_images(self):
+        names = filedialog.askopenfilenames(
+            parent=self, title="选择截图",
+            filetypes=[("图片", "*.jpg *.jpeg *.png *.bmp *.webp"), ("所有文件", "*.*")])
+        if not names:
+            return
+        self._sync_captions()
+        for n in names:
+            self.items.append({"path": Path(n), "caption": ""})
+        self.render_list()
+
+    def load_free_dir(self):
+        folder = Path(self.owner.output_dir_var.get()) / "自由截图"
+        if not folder.exists():
+            messagebox.showinfo("整理文档", "还没有「自由截图」目录，先去截几张图。", parent=self)
+            return
+        self._sync_captions()
+        added = 0
+        for p in sorted(folder.glob("*.jpg")):
+            self.items.append({"path": p, "caption": ""})
+            added += 1
+        self.render_list()
+        self.status_var.set(f"已加载 {added} 张自由截图。")
+
+    def clear_items(self):
+        self.items = []
+        self.render_list()
+
+    def move(self, i, delta):
+        self._sync_captions()
+        j = i + delta
+        if 0 <= j < len(self.items):
+            self.items[i], self.items[j] = self.items[j], self.items[i]
+            self.render_list()
+
+    def remove(self, i):
+        self._sync_captions()
+        del self.items[i]
+        self.render_list()
+
+    def render_list(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        self.thumb_refs = []
+        for i, it in enumerate(self.items):
+            row = tk.Frame(self.list_frame, bg=COLOR_CARD, highlightbackground="#dde7e1", highlightthickness=1)
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=str(i + 1), bg=COLOR_CARD, fg=COLOR_MUTED, width=3).pack(side="left", padx=4)
+            try:
+                thumb = Image.open(it["path"])
+                thumb.thumbnail((72, 72))
+                photo = ImageTk.PhotoImage(thumb)
+                self.thumb_refs.append(photo)
+                tk.Label(row, image=photo, bg=COLOR_CARD).pack(side="left", padx=4, pady=4)
+            except Exception:
+                tk.Label(row, text="?", bg=COLOR_CARD, width=9).pack(side="left", padx=4)
+            entry = tk.Entry(row)
+            entry.insert(0, it.get("caption", ""))
+            entry.pack(side="left", fill="x", expand=True, padx=6)
+            it["_entry"] = entry
+            tk.Button(row, text="↑", command=lambda i=i: self.move(i, -1), bd=0, bg=COLOR_CARD, width=2).pack(side="left")
+            tk.Button(row, text="↓", command=lambda i=i: self.move(i, 1), bd=0, bg=COLOR_CARD, width=2).pack(side="left")
+            tk.Button(row, text="✕", command=lambda i=i: self.remove(i), bd=0, bg=COLOR_CARD, fg="#c0392b", width=2).pack(side="left", padx=(0, 4))
+        self.count_label.configure(text=f"共 {len(self.items)} 张")
+
+    def _collect(self):
+        self._sync_captions()
+        loaded = []
+        for it in self.items:
+            try:
+                with Image.open(it["path"]) as im:
+                    loaded.append((im.convert("RGB"), it.get("caption", "")))
+            except Exception as exc:
+                self.owner.log(f"读取图片失败 {Path(it['path']).name}：{exc}")
+        return loaded
+
+    def _out_dir(self):
+        folder = Path(self.owner.output_dir_var.get()) / "文档"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def export_long(self):
+        items = self._collect()
+        if not items:
+            messagebox.showinfo("整理文档", "请先添加截图。", parent=self)
+            return
+        try:
+            image = build_long_image(self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items)
+            name = safe_folder_name(self.title_var.get(), "使用说明")
+            out = self._out_dir() / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.jpg"
+            image.save(out, "JPEG", quality=92)
+            self.status_var.set(f"已导出长图：{out.name}")
+            self.owner.log(f"已导出长图：{out}")
+            os.startfile(str(out.parent))
+        except Exception as exc:
+            messagebox.showerror("整理文档", f"导出长图失败：{exc}", parent=self)
+            write_error_log(f"导出长图失败：{exc}")
+
+    def export_pdf(self):
+        items = self._collect()
+        if not items:
+            messagebox.showinfo("整理文档", "请先添加截图。", parent=self)
+            return
+        try:
+            name = safe_folder_name(self.title_var.get(), "使用说明")
+            out = self._out_dir() / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.pdf"
+            build_doc_pdf(out, self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items)
+            self.status_var.set(f"已导出 PDF：{out.name}")
+            self.owner.log(f"已导出 PDF：{out}")
+            os.startfile(str(out.parent))
+        except Exception as exc:
+            messagebox.showerror("整理文档", f"导出 PDF 失败：{exc}", parent=self)
+            write_error_log(f"导出 PDF 失败：{exc}")
+
+
 class FreePanel(tk.Toplevel):
     """自由截图模式的置顶小浮窗：显示已截数量 + 打开目录 / 结束 / 显示主程序。"""
 
@@ -1882,6 +2162,8 @@ class SnapSaverApp:
                         command=self._save_keep_original).grid(row=0, column=10, padx=(10, 0))
         self.repair_button = ttk.Button(toolbar, text="AI 智能修复", style="Repair.TButton", command=self.ai_repair)
         self.repair_button.grid(row=0, column=11, padx=(8, 0))
+        self.doc_button = ttk.Button(toolbar, text="整理成文档", command=self.open_export_doc)
+        self.doc_button.grid(row=0, column=12, padx=(14, 0))
 
         # 列表 + 日志
         body = ttk.Panedwindow(root, orient="horizontal")
@@ -2345,6 +2627,9 @@ class SnapSaverApp:
             os.startfile(str(path))
         except Exception as exc:
             self.log(f"打开目录失败：{exc}")
+
+    def open_export_doc(self):
+        ExportDocWindow(self)
 
     def _save_free_capture(self, image):
         target_dir = Path(self.output_dir_var.get()) / "自由截图"
