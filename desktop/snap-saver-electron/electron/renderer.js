@@ -68,4 +68,125 @@ $("syncBtn")?.addEventListener("click", async () => {
   }
 });
 
+// ───────────────────────── 整理成文档 ─────────────────────────
+const docItems = []; // [{path, name, caption, hint, size, thumb}]
+const SIZE_OPTS = [
+  ["full", "全宽"], ["two_third", "三分之二"], ["half", "二分之一"], ["quarter", "四分之一"],
+];
+
+function openDoc() { $("docModal").style.display = "flex"; renderDocList(); }
+function closeDoc() { $("docModal").style.display = "none"; }
+
+$("docBtn")?.addEventListener("click", openDoc);
+$("docClose")?.addEventListener("click", closeDoc);
+$("docModal")?.addEventListener("click", (e) => { if (e.target.id === "docModal") closeDoc(); });
+
+async function docAddImages() {
+  const paths = await window.snapAPI.pickImages();
+  for (const p of paths) {
+    const thumb = await window.snapAPI.readThumb(p);
+    docItems.push({
+      path: p, name: p.split(/[\\/]/).pop(), caption: "", hint: "", size: "full", thumb,
+    });
+  }
+  renderDocList();
+}
+$("docAddImg")?.addEventListener("click", docAddImages);
+$("importBtn")?.addEventListener("click", async () => { openDoc(); await docAddImages(); });
+
+function syncDocFromDOM() {
+  document.querySelectorAll(".doc-row").forEach((row, i) => {
+    if (!docItems[i]) return;
+    const cap = row.querySelector(".doc-caption");
+    const hint = row.querySelector(".doc-hintbox");
+    const sel = row.querySelector("select");
+    if (cap) docItems[i].caption = cap.value;
+    if (hint) docItems[i].hint = hint.value;
+    if (sel) docItems[i].size = sel.value;
+  });
+}
+
+function renderDocList() {
+  const list = $("docList");
+  $("docCount").textContent = "共 " + docItems.length + " 张";
+  if (docItems.length === 0) {
+    list.innerHTML = '<div class="doc-empty">点「添加图片」选择截图，给每张填说明或用 AI 一键生成，然后导出 PDF / 长图。</div>';
+    return;
+  }
+  list.innerHTML = "";
+  docItems.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "doc-row";
+    const opts = SIZE_OPTS.map(([v, t]) =>
+      `<option value="${v}" ${it.size === v ? "selected" : ""}>${t}</option>`).join("");
+    row.innerHTML = `
+      <img class="doc-thumb" src="${it.thumb || ""}" alt="" />
+      <div class="doc-col">
+        <div class="doc-row-top">
+          <span class="doc-seq">${i + 1}</span>
+          <button class="btn btn-blue ai-btn"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" transform="translate(3 2)"/></svg>AI 描述</button>
+          <span style="font-size:12px;color:var(--hint)">文档宽度</span>
+          <select>${opts}</select>
+          <span class="spacer"></span>
+          <button class="btn up-btn" title="上移">↑</button>
+          <button class="btn down-btn" title="下移">↓</button>
+          <button class="btn del-btn" title="删除" style="color:#c0392b">✕</button>
+        </div>
+        <input class="doc-hintbox" placeholder="给 AI 的提示（这张图想表达什么，可选）" value="${(it.hint || "").replace(/"/g, "&quot;")}" />
+        <textarea class="doc-caption" placeholder="说明文字（会出现在文档里；可点 AI 描述自动生成）">${it.caption || ""}</textarea>
+      </div>`;
+    row.querySelector(".ai-btn").addEventListener("click", () => docDescribe(i, row));
+    row.querySelector(".up-btn").addEventListener("click", () => { syncDocFromDOM(); if (i > 0) { [docItems[i - 1], docItems[i]] = [docItems[i], docItems[i - 1]]; renderDocList(); } });
+    row.querySelector(".down-btn").addEventListener("click", () => { syncDocFromDOM(); if (i < docItems.length - 1) { [docItems[i + 1], docItems[i]] = [docItems[i], docItems[i + 1]]; renderDocList(); } });
+    row.querySelector(".del-btn").addEventListener("click", () => { syncDocFromDOM(); docItems.splice(i, 1); renderDocList(); });
+    list.appendChild(row);
+  });
+}
+
+async function docDescribe(i, row) {
+  syncDocFromDOM();
+  const it = docItems[i];
+  const btn = row.querySelector(".ai-btn");
+  const old = btn.innerHTML;
+  btn.disabled = true; btn.textContent = "生成中…";
+  $("docStatus").textContent = "正在为第 " + (i + 1) + " 张生成 AI 描述…";
+  try {
+    const r = await window.snapAPI.backend("describe_image", { path: it.path, hint: it.hint, style: "detail" });
+    if (r.ok && r.data?.description) {
+      it.caption = r.data.description;
+      row.querySelector(".doc-caption").value = it.caption;
+      $("docStatus").textContent = "第 " + (i + 1) + " 张 AI 描述已生成" + (r.data.charged ? "（已扣 1 次）" : "（当前免费）");
+    } else {
+      $("docStatus").textContent = "AI 描述失败：" + (r.error || "请重试");
+    }
+  } catch (e) {
+    $("docStatus").textContent = "AI 描述失败：" + e.message;
+  } finally {
+    btn.disabled = false; btn.innerHTML = old;
+  }
+}
+
+async function docExport(format) {
+  syncDocFromDOM();
+  if (docItems.length === 0) { $("docStatus").textContent = "请先添加图片。"; return; }
+  $("docStatus").textContent = "正在导出…";
+  const items = docItems.map((it) => ({ path: it.path, caption: it.caption, size: it.size }));
+  try {
+    const r = await window.snapAPI.backend("export_doc", {
+      title: $("docTitle").value, intro: $("docIntro").value,
+      format, watermark: true, items,
+    });
+    if (r.ok) {
+      $("docStatus").textContent = "已导出：" + r.data.path;
+      window.snapAPI.backend("open_path", { path: r.data.dir });
+    } else {
+      $("docStatus").textContent = "导出失败：" + (r.error || "");
+    }
+  } catch (e) {
+    $("docStatus").textContent = "导出失败：" + e.message;
+  }
+}
+$("docExportPdf")?.addEventListener("click", () => docExport("pdf"));
+$("docExportLong")?.addEventListener("click", () => docExport("long"));
+
 window.addEventListener("DOMContentLoaded", init);

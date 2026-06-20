@@ -7,4 +7,8 @@ contextBridge.exposeInMainWorld("snapAPI", {
   backend: (cmd, args) => ipcRenderer.invoke("backend", cmd, args),
   // 复制到剪贴板
   copy: (text) => ipcRenderer.invoke("copy", text),
+  // 选图片文件 → 路径数组
+  pickImages: () => ipcRenderer.invoke("pickImages"),
+  // 读图为 dataURL（显示缩略图）
+  readThumb: (p) => ipcRenderer.invoke("readThumb", p),
 });

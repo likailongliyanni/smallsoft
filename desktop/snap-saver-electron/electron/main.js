@@ -1,6 +1,7 @@
 // Electron 主进程：开窗口 + 启动 Python 后端(backend.py) + 转发界面命令。
-const { app, BrowserWindow, ipcMain, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, clipboard, dialog } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { spawn } = require("child_process");
 
 let pyProc = null;
@@ -86,6 +87,28 @@ ipcMain.handle("backend", async (_e, cmd, args) => {
 ipcMain.handle("copy", (_e, text) => {
   clipboard.writeText(String(text || ""));
   return true;
+});
+
+// 选图片文件（原生对话框），返回路径数组
+ipcMain.handle("pickImages", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "选择截图",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "bmp", "webp"] }],
+  });
+  return r.canceled ? [] : r.filePaths;
+});
+
+// 读图为 dataURL（界面显示缩略图用）
+ipcMain.handle("readThumb", (_e, filePath) => {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    return `data:${mime};base64,` + buf.toString("base64");
+  } catch {
+    return "";
+  }
 });
 
 app.whenReady().then(() => {

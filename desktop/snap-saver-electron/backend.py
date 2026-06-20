@@ -82,11 +82,99 @@ def cmd_ping(args):
     return {"pong": True, "version": S.APP_VERSION}
 
 
+def cmd_list_shots(args):
+    """列出「自由截图」目录里的图片，给整理文档用。
+    args.dir 可指定截图目录；默认用户文档下的「存图结果/自由截图」。"""
+    folder = args.get("dir")
+    if folder:
+        folder = Path(folder)
+    else:
+        # 与原版一致：输出目录/自由截图
+        out = Path(S.app_dir()) / "存图结果" / "自由截图"
+        folder = out
+    shots = []
+    if folder.exists():
+        for p in sorted(folder.glob("*.jpg")):
+            try:
+                with S.Image.open(p) as im:
+                    w, h = im.size
+            except Exception:
+                w, h = 0, 0
+            shots.append({"path": str(p), "name": p.name, "w": w, "h": h})
+    return {"shots": shots, "dir": str(folder)}
+
+
+def cmd_describe_image(args):
+    """对一张图调 AI 生成说明。args: {path, hint, style}"""
+    if not _STATE["token"]:
+        S.server_register_device(_server_url(), S.local_software_id())  # 兜底先登记
+        # 重新登记拿 token
+        data = S.server_register_device(_server_url(), S.local_software_id())
+        _STATE["token"] = str(data.get("token") or "")
+    path = Path(args.get("path") or "")
+    hint = str(args.get("hint") or "")
+    style = str(args.get("style") or "detail")
+    res = S.server_describe_image(_server_url(), _STATE["token"], path, hint=hint, style=style)
+    return {"description": res.get("description", ""), "charged": bool(res.get("charged"))}
+
+
+def cmd_export_doc(args):
+    """导出整理文档。args: {title, intro, items:[{path,caption,size}], format:'pdf'|'long', watermark}"""
+    title = str(args.get("title") or "使用说明")
+    intro = str(args.get("intro") or "")
+    fmt = str(args.get("format") or "pdf")
+    watermark = bool(args.get("watermark", True))
+    raw_items = args.get("items") or []
+
+    loaded = []
+    for it in raw_items:
+        p = Path(it.get("path") or "")
+        if not p.exists():
+            continue
+        try:
+            with S.Image.open(p) as im:
+                img = im.convert("RGB")
+                img.load()
+            loaded.append((img, str(it.get("caption") or ""), str(it.get("size") or "full")))
+        except Exception:
+            continue
+    if not loaded:
+        raise RuntimeError("没有可导出的图片。")
+
+    out_dir = Path(S.app_dir()) / "存图结果" / "文档"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = S.safe_folder_name(title, "使用说明")
+    stamp = S.time.strftime("%Y%m%d-%H%M%S")
+
+    if fmt == "long":
+        out = out_dir / f"{name}_{stamp}.jpg"
+        image = S.build_long_image(title, intro, loaded, watermark=watermark)
+        image.save(out, "JPEG", quality=92)
+    else:
+        out = out_dir / f"{name}_{stamp}.pdf"
+        S.build_doc_pdf(out, title, intro, loaded, watermark=watermark)
+    return {"path": str(out), "dir": str(out_dir)}
+
+
+def cmd_open_path(args):
+    """在资源管理器里打开一个文件/目录。"""
+    target = args.get("path") or ""
+    try:
+        S.os.startfile(str(target))
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 HANDLERS = {
     "ping": cmd_ping,
     "get_serial": cmd_get_serial,
     "register": cmd_register,
     "sync_quota": cmd_sync_quota,
+    "list_shots": cmd_list_shots,
+    "describe_image": cmd_describe_image,
+    "export_doc": cmd_export_doc,
+    "open_path": cmd_open_path,
 }
 
 
