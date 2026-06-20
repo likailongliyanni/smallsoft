@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>📁 文件上传 - 录制识别测试</title>
+<style>
+  body { font-family: 'Microsoft YaHei', sans-serif; max-width: 720px;
+         margin: 30px auto; padding: 20px;
+         background: #f8fafc; color: #1f2937; }
+  h1 { color: #16a34a; margin-bottom: 8px; }
+  .lead { color: #64748b; margin-bottom: 24px; }
+  .case {
+    background: white; border-radius: 8px; padding: 18px 22px;
+    margin-bottom: 16px; border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  h2 { color: #0c4a6e; margin: 0 0 4px; font-size: 16px; }
+  .desc { color: #64748b; font-size: 13px; margin: 0 0 14px; }
+
+  /* 场景 1：原生按钮触发文件对话框 */
+  .upload-btn-1 {
+    padding: 10px 24px; background: #2563eb; color: white;
+    border: none; border-radius: 6px; font-size: 14px; cursor: pointer;
+  }
+  .upload-btn-1:hover { background: #1d4ed8; }
+
+  /* 场景 2：label 包 input(隐藏) */
+  .upload-label {
+    display: inline-block; padding: 10px 24px;
+    background: #16a34a; color: white;
+    border-radius: 6px; cursor: pointer;
+  }
+  .upload-label input { display: none; }
+
+  /* 场景 3：自定义 + 链接式 */
+  .upload-link {
+    color: #ea580c; text-decoration: underline; cursor: pointer;
+  }
+  .upload-link input { display: none; }
+
+  /* 场景 4：multiple */
+  .upload-multi {
+    padding: 10px 24px; background: #7c3aed; color: white;
+    border: none; border-radius: 6px; cursor: pointer;
+  }
+
+  .result {
+    margin-top: 12px; padding: 10px;
+    background: #f0fdf4; border: 1px solid #16a34a;
+    border-radius: 6px; min-height: 24px;
+    font-family: Consolas, monospace; font-size: 13px;
+    color: #15803d;
+  }
+  .result.empty { background: #f8fafc; border-color: #cbd5e1; color: #94a3b8; }
+
+  ol { color: #64748b; line-height: 1.8; }
+  code { background: #fef3c7; padding: 2px 6px; border-radius: 3px; color: #78350f; }
+</style>
+</head>
+<body>
+
+<h1>📁 文件上传 - 录制识别测试页</h1>
+<p class="lead">用「好办法」软件打开这个页面录制，依次点击下面 4 个按钮选文件，
+看整理页是否每一个都被自动识别为「上传文件」步骤（带绿色「✓ 自动识别」徽章）。</p>
+
+<div class="case">
+  <h2>① 原生按钮 + 隐藏 input</h2>
+  <p class="desc">最常见做法：点 button → JS 触发隐藏 input.click()</p>
+  <button class="upload-btn-1" id="btn1" type="button">📤 点击上传图片</button>
+  <input id="file1" type="file" accept="image/*" style="display:none">
+  <div class="result empty" id="result1">还没选择文件</div>
+</div>
+
+<div class="case">
+  <h2>② label 包裹 input</h2>
+  <p class="desc">CSS 框架很爱用：&lt;label&gt;&lt;input type="file"&gt;&lt;/label&gt;</p>
+  <label class="upload-label">
+    📂 选择文件
+    <input id="file2" type="file" accept="image/*,application/pdf">
+  </label>
+  <div class="result empty" id="result2">还没选择文件</div>
+</div>
+
+<div class="case">
+  <h2>③ 文字链接式上传</h2>
+  <p class="desc">用 &lt;a&gt; 或 &lt;span&gt; 触发，更复杂的 DOM 结构</p>
+  <label class="upload-link">
+    点这里上传附件
+    <input id="file3" type="file" accept="*/*">
+  </label>
+  <div class="result empty" id="result3">还没选择文件</div>
+</div>
+
+<div class="case">
+  <h2>④ multiple 多文件上传</h2>
+  <p class="desc">支持一次选多个文件（input 有 multiple 属性）</p>
+  <button class="upload-multi" id="btn4" type="button">🖼️ 上传多张图（multiple）</button>
+  <input id="file4" type="file" multiple accept="image/*" style="display:none">
+  <div class="result empty" id="result4">还没选择文件</div>
+</div>
+
+<hr style="margin: 30px 0; border: none; border-top: 1px dashed #cbd5e1">
+
+<h2 style="color:#0c4a6e">🎯 期望结果</h2>
+<ol>
+  <li>录制完成后，进入「整理」页</li>
+  <li>应该看到 <strong>4 个步骤都是绿色的 upload 类型</strong></li>
+  <li>每个 upload 步骤上方都有 <code>✓ 自动识别：点这一步会打开资源管理器</code> 徽章</li>
+  <li>Excel 列名建议是 <code>XXX_文件夹</code> 格式</li>
+  <li>录制时点的"按钮"那一步 click 不应该重复出现（已经被升级成 upload）</li>
+</ol>
+
+<script>
+  // 场景 1：按钮 click 触发 input click
+  document.getElementById('btn1').onclick = () => document.getElementById('file1').click();
+
+  // 全部 input 监听 change 显示文件
+  function bindResult(inputId, resultId) {
+    const input = document.getElementById(inputId);
+    const result = document.getElementById(resultId);
+    input.onchange = e => {
+      const files = Array.from(e.target.files);
+      if (files.length === 0) {
+        result.className = 'result empty';
+        result.textContent = '还没选择文件';
+      } else {
+        result.className = 'result';
+        result.textContent = '✓ 已选 ' + files.length + ' 个文件: '
+          + files.map(f => f.name).join(', ');
+      }
+    };
+  }
+  bindResult('file1', 'result1');
+  bindResult('file2', 'result2');
+  bindResult('file3', 'result3');
+  bindResult('file4', 'result4');
+
+  // 场景 4：按钮 click 触发 input click
+  document.getElementById('btn4').onclick = () => document.getElementById('file4').click();
+</script>
+
+</body>
+</html>

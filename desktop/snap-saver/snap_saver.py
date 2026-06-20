@@ -570,6 +570,23 @@ def server_remove_watermark_to(server_url: str, token: str, source: Path, target
             pass
 
 
+def server_describe_image(server_url: str, token: str, path: Path,
+                          hint: str = "", style: str = "detail") -> dict:
+    """调用后端 AI 图片描述：上传截图 + 用户简介，返回 {description, charged, remaining}。
+    复用 detect 的图片预处理（压到 1024px、转 JPEG）省流量、提速。"""
+    with tempfile.TemporaryDirectory(prefix="snap_describe_") as tmp:
+        prepared = prepare_detect_input(path, Path(tmp))
+        response = _server_upload(
+            server_url, token, "/api/desktop/doc/describe-image", prepared,
+            timeout=150, expect_json=True,
+            fields=[("hint", hint or ""), ("style", style or "detail")])
+    return {
+        "description": str(response.get("description") or "").strip(),
+        "charged": bool(response.get("charged")),
+        "remaining": response.get("remaining"),
+    }
+
+
 def ds_upload_image(api_key: str, path: Path) -> str:
     policy = _ds_request(
         f"{DASHSCOPE_BASE}/api/v1/uploads?action=getPolicy&model={WATERMARK_MODEL}", api_key
@@ -1035,13 +1052,16 @@ def _doc_font(size: int):
     return ImageFont.load_default()
 
 
-def _wrap_text(draw, text, font, max_width):
-    """按像素宽度把文本（含中文）折行。"""
+def _wrap_text(draw, text, font, max_width, indent=False):
+    """按像素宽度把文本（含中文）折行。
+    indent=True 时每个自然段首行缩进两个全角字符（中文排版习惯）。"""
+    lead = "　　" if indent else ""  # 两个全角空格
     lines = []
     for para in str(text).split("\n"):
         if para == "":
             lines.append("")
             continue
+        para = lead + para  # 段首缩进并入正文，折行时自然占位
         cur = ""
         for ch in para:
             if draw.textlength(cur + ch, font=font) <= max_width or not cur:
@@ -1054,29 +1074,93 @@ def _wrap_text(draw, text, font, max_width):
 
 
 def _doc_target_width(items, cap_min=1100, cap_max=2400):
-    """内容区目标宽度：取所有图最大宽度（限制在 1100~2400），避免把高清截图降采样糊掉。"""
+    """内容区目标宽度：取所有图最大宽度（限制在 1100~2400），避免把高清截图降采样糊掉。
+    item 兼容 (img, cap) 或 (img, cap, size)，只取第一个元素（图）。"""
     if not items:
         return cap_min
-    return max(cap_min, min(cap_max, max(im.width for im, _ in items)))
+    return max(cap_min, min(cap_max, max(it[0].width for it in items)))
 
 
-def render_doc_card(image, caption, index, target_inner, scale):
-    """单张截图卡片：图 + 下方序号说明。宽度差异 ≤20% 的图等比对齐到 target_inner，
-    明显更窄的保持原始尺寸居中（不放大，免得糊）。所有排版尺寸随 scale 等比，保证清晰。"""
+def render_doc_card(image, caption, index, target_inner, scale, layout="auto", size="big"):
+    """单张截图卡片，自适应版式 + 自动缩放：
+      - 竖图（高>宽 1.15 倍）且文字较多 → 图左文右（图自动放大填满文字高度，无留白）
+      - 其它（横图/方图/文字很少）→ 图上文下（图按 size 档位缩放，居中）
+    size 档位（只作用于「图上文下」版式，控制图占内容宽度的比例）：
+      big=100% / medium=72% / small=48%。让用户能把大截图排成中/小图。
+    放大有上限（最多 1.8 倍）防止把低清小图拉糊。
+    layout 可强制 'top' / 'side' / 'auto'。所有排版尺寸随 scale 等比。"""
     pad = round(40 * scale)
+    gap = round(36 * scale)
     img = image.convert("RGB")
-    w = img.width
-    if w > target_inner or w >= target_inner * 0.8:
-        new_w = target_inner
-        new_h = max(1, round(img.height * new_w / w))
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-    card_w = target_inner + pad * 2
-    x = (card_w - img.width) // 2
     cap_font = _doc_font(max(22, round(28 * scale)))
     line_h = max(30, round(40 * scale))
+    text = str(caption or "").strip()
     measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
-    text = ((f"{index}. " if index else "") + str(caption or "").strip()).strip()
-    cap_lines = _wrap_text(measure, text, cap_font, target_inner) if text else []
+    card_w = target_inner + pad * 2
+    MAX_UPSCALE = 1.8  # 放大上限，超过会糊
+
+    # size 档位 → 图占内容区的宽度比例（A4 版面：全宽 / 2/3 / 1/2 / 1/4）
+    size_ratio = {
+        "full": 1.0, "two_third": 0.667, "half": 0.5, "quarter": 0.25,
+        # 兼容旧值
+        "big": 1.0, "medium": 0.667, "small": 0.5,
+    }.get(size, 1.0)
+
+    # ── 自动判定版式 ──
+    # 1) 竖图有文字 → 图左文右
+    # 2) 图被缩小到 ≤55%（half / quarter）→ 图左文右环绕（旁边留白给文字，更紧凑好看）
+    # 3) 其它（全宽 / 2/3 横图）→ 图上文下
+    is_portrait = img.height > img.width * 1.15
+    if layout == "auto":
+        if text and (is_portrait or size_ratio <= 0.55):
+            layout = "side"
+        else:
+            layout = "top"
+
+    # ───── 图左文右（文字环绕在图旁）─────
+    if layout == "side" and text:
+        # 图宽：竖图按填满文字高度，横图按 size_ratio（缩小档）控制
+        if is_portrait:
+            # 竖图：先估文字高，让图高≈文字高，消除留白
+            est_text_w = card_w - (pad + round(target_inner * 0.50) + gap) - pad
+            est_lines = _wrap_text(measure, text, cap_font, est_text_w, indent=True)
+            target_img_h = (len(est_lines) * line_h) or img.height
+            scale_by_h = target_img_h / img.height
+            scale_by_w = round(target_inner * 0.55) / img.width
+            factor = max(0.05, min(scale_by_h, scale_by_w, MAX_UPSCALE))
+        else:
+            # 横图缩小档：图宽 = 内容区 × size_ratio
+            factor = (target_inner * size_ratio) / img.width
+            factor = max(0.05, min(factor, MAX_UPSCALE))
+        img_w = max(1, round(img.width * factor))
+        img_h = max(1, round(img.height * factor))
+        img = img.resize((img_w, img_h), Image.LANCZOS)
+
+        text_x = pad + img_w + gap
+        text_w = card_w - text_x - pad
+        cap_lines = _wrap_text(measure, text, cap_font, text_w, indent=True)
+        text_h = len(cap_lines) * line_h
+        content_h = max(img_h, text_h)
+        card = Image.new("RGB", (card_w, pad + content_h + pad), "white")
+        card.paste(img, (pad, pad + (content_h - img_h) // 2))
+        draw = ImageDraw.Draw(card)
+        y = pad
+        for ln in cap_lines:
+            draw.text((text_x, y), ln, fill="#222222", font=cap_font)
+            y += line_h
+        return card
+
+    # ───── 图上文下（默认）─────
+    box_w = max(1, round(target_inner * size_ratio))
+    w = img.width
+    factor = box_w / w
+    factor = min(factor, MAX_UPSCALE)  # 小图放大不超上限，防糊
+    new_w = max(1, round(w * factor))
+    new_h = max(1, round(img.height * factor))
+    if (new_w, new_h) != img.size:
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+    x = (card_w - img.width) // 2
+    cap_lines = _wrap_text(measure, text, cap_font, target_inner, indent=True) if text else []
     cap_block = (round(16 * scale) + len(cap_lines) * line_h) if cap_lines else 0
     card = Image.new("RGB", (card_w, pad + img.height + cap_block + pad), "white")
     card.paste(img, (x, pad))
@@ -1113,18 +1197,67 @@ def render_doc_title(title, intro, target_inner, scale):
     return page
 
 
-def build_doc_pages(title, intro, items):
-    """items: [(PIL.Image, caption)]，返回 [标题页, 卡片1, 卡片2, ...]。"""
+DOC_WATERMARK = "好办法智能截图  ·  tools.haobanfa.online"
+
+
+def _tile_watermark(page, scale, text=DOC_WATERMARK):
+    """在整张页面铺满斜 45° 的淡色水印（试用版用）。原地叠加，不改尺寸。"""
+    if not text:
+        return page
+    base = page.convert("RGB")
+    W, H = base.size
+    wm_font = _doc_font(max(22, round(30 * scale)))
+
+    # 先把一条水印文字画到透明小图上，再旋转 45°，然后平铺整页
+    measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
+    tw = int(measure.textlength(text, font=wm_font))
+    th = max(28, round(40 * scale))
+    tile = Image.new("RGBA", (tw + 20, th + 20), (0, 0, 0, 0))
+    ImageDraw.Draw(tile).text((10, 6), text, font=wm_font, fill=(150, 150, 150, 70))
+    tile = tile.rotate(45, expand=True, resample=Image.BICUBIC)
+
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    step_x = int(tile.width * 0.9)
+    step_y = int(tile.height * 1.4)
+    if step_x < 10:
+        step_x = 10
+    if step_y < 10:
+        step_y = 10
+    row = 0
+    y = -tile.height
+    while y < H:
+        # 隔行错位，平铺更自然
+        x = -tile.width + (step_x // 2 if row % 2 else 0)
+        while x < W:
+            overlay.alpha_composite(tile, (x, y))
+            x += step_x
+        y += step_y
+        row += 1
+
+    out = Image.alpha_composite(base.convert("RGBA"), overlay)
+    return out.convert("RGB")
+
+
+def build_doc_pages(title, intro, items, watermark=True, size="big"):
+    """items: [(PIL.Image, caption)]，返回 [标题页, 卡片1, 卡片2, ...]。
+    watermark=True 时每页都铺满斜 45° 试用水印（付费用户传 False 去掉）。
+    size: 图片大小档位 big/medium/small，控制图在文档里占多宽。"""
     target = _doc_target_width(items)
     scale = target / 1000.0
     pages = [render_doc_title(title, intro, target, scale)]
-    for i, (img, cap) in enumerate(items, 1):
-        pages.append(render_doc_card(img, cap, i, target, scale))
+    for i, it in enumerate(items, 1):
+        # item 可以是 (img, cap) 或 (img, cap, per_item_size)。
+        # 带第三个就用每张图自己的尺寸，否则用全局 size 兜底。
+        img, cap = it[0], it[1]
+        item_size = it[2] if len(it) > 2 and it[2] else size
+        pages.append(render_doc_card(img, cap, i, target, scale, size=item_size))
+    if watermark:
+        pages = [_tile_watermark(p, scale) for p in pages]
     return pages
 
 
-def build_long_image(title, intro, items):
-    pages = build_doc_pages(title, intro, items)
+def build_long_image(title, intro, items, watermark=True, size="big"):
+    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size)
     width = max(p.width for p in pages)
     gap = 18
     total_h = sum(p.height for p in pages) + gap * (len(pages) - 1) + 40
@@ -1136,8 +1269,8 @@ def build_long_image(title, intro, items):
     return out
 
 
-def build_doc_pdf(path, title, intro, items):
-    pages = build_doc_pages(title, intro, items)
+def build_doc_pdf(path, title, intro, items, watermark=True, size="big"):
+    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size)
     # quality=95 + 不降采样，避免 PIL 存 PDF 时把截图压糊
     pages[0].save(str(path), "PDF", save_all=True, append_images=pages[1:],
                   resolution=150.0, quality=95)
@@ -1150,10 +1283,16 @@ class ExportDocWindow(tk.Toplevel):
         super().__init__(owner.root)
         self.owner = owner
         self.title("整理成文档（长图 / PDF）")
-        self.geometry("780x660")
+        self.geometry("820x680")
         self.minsize(700, 560)
-        self.transient(owner.root)
+        # 不用 transient：transient 的子窗口在 Windows 上没有最大化/最小化按钮。
+        # 去掉它，标题栏就有完整的「最小化 / 最大化 / 关闭」三个系统按钮。
         self.configure(bg=COLOR_BG)
+        # 双击标题栏或下面这行都能最大化；这里保证窗口可被系统正常最大化
+        try:
+            self.resizable(True, True)
+        except Exception:
+            pass
         self.items = []        # [{path, caption, _entry}]
         self.thumb_refs = []
 
@@ -1169,21 +1308,39 @@ class ExportDocWindow(tk.Toplevel):
         bar = tk.Frame(self, bg=COLOR_BG)
         bar.pack(fill="x", padx=14, pady=8)
         tk.Button(bar, text="添加图片", command=self.add_images).pack(side="left")
-        tk.Button(bar, text="加载「自由截图」", command=self.load_free_dir).pack(side="left", padx=(8, 0))
+        tk.Button(bar, text="加载本轮截图", command=lambda: self.load_free_dir(only_session=True)).pack(side="left", padx=(8, 0))
+        tk.Button(bar, text="全部历史截图", command=lambda: self.load_free_dir(only_session=False)).pack(side="left", padx=(8, 0))
         tk.Button(bar, text="清空", command=self.clear_items).pack(side="left", padx=(8, 0))
         self.count_label = tk.Label(bar, text="共 0 张", bg=COLOR_BG, fg=COLOR_MUTED)
         self.count_label.pack(side="right")
+        tk.Label(bar, text="每张图可单独选「文档宽度」", bg=COLOR_BG, fg=COLOR_MUTED,
+                 font=("Microsoft YaHei UI", 9)).pack(side="right", padx=(0, 10))
 
         mid = tk.Frame(self, bg=COLOR_BG)
         mid.pack(fill="both", expand=True, padx=14)
         canvas = tk.Canvas(mid, bg=COLOR_BG, highlightthickness=0)
+        self._list_canvas = canvas
         scroll = ttk.Scrollbar(mid, orient="vertical", command=canvas.yview)
         self.list_frame = tk.Frame(canvas, bg=COLOR_BG)
         self.list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.list_frame, anchor="nw", width=720)
+        self._list_window = canvas.create_window((0, 0), window=self.list_frame, anchor="nw", width=720)
+        # 行宽跟随 canvas 实际宽度，保证右侧按钮组在任何窗口尺寸下都贴右可见
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(self._list_window, width=e.width))
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+
+        # 鼠标滚轮滚动：鼠标移入整理窗口时全局绑定，移出时解绑（不影响主窗口）
+        def _on_wheel(event):
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+            return "break"
+        self.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", _on_wheel))
+        self.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"))
+        # 关窗时确保解绑，避免残留全局钩子
+        self.bind("<Destroy>", lambda e: (self.unbind_all("<MouseWheel>") if e.widget is self else None))
 
         bottom = tk.Frame(self, bg=COLOR_BG)
         bottom.pack(fill="x", padx=14, pady=12)
@@ -1195,6 +1352,11 @@ class ExportDocWindow(tk.Toplevel):
         tk.Button(bottom, text="导出 PDF", command=self.export_pdf, bg=COLOR_GREEN, fg="#ffffff",
                   bd=0, relief="flat", cursor="hand2", padx=16, pady=8,
                   font=("Microsoft YaHei UI", 10, "bold")).pack(side="right", padx=(0, 8))
+        # 打开整理文档时，自动把「本轮」自由截图加载进来（用户的核心诉求：
+        # 默认只整理这一轮截的图，不用每次手动加载、也不会混入历史图）
+        loaded = self.load_free_dir(only_session=True, silent=True)
+        if loaded:
+            self.status_var.set(f"已自动载入本轮 {loaded} 张截图，可拖动排序、填说明或点 ✨AI描述。")
         self.render_list()
 
     def _sync_captions(self):
@@ -1202,7 +1364,14 @@ class ExportDocWindow(tk.Toplevel):
             entry = it.get("_entry")
             if entry is not None:
                 try:
-                    it["caption"] = entry.get()
+                    # Text 多行框：取全部内容并去掉末尾换行
+                    it["caption"] = entry.get("1.0", "end").strip()
+                except tk.TclError:
+                    pass
+            hint_entry = it.get("_hint_entry")
+            if hint_entry is not None:
+                try:
+                    it["hint"] = hint_entry.get().strip()
                 except tk.TclError:
                     pass
 
@@ -1217,18 +1386,52 @@ class ExportDocWindow(tk.Toplevel):
             self.items.append({"path": Path(n), "caption": ""})
         self.render_list()
 
-    def load_free_dir(self):
+    def load_free_dir(self, only_session=True, silent=False):
+        """加载自由截图。
+        only_session=True（默认）：只加载「本轮」自由截图（最近一次开启自由截图后截的），
+                                  避免把历史所有截图都塞进来。
+        only_session=False：加载目录里全部历史截图。"""
         folder = Path(self.owner.output_dir_var.get()) / "自由截图"
         if not folder.exists():
-            messagebox.showinfo("整理文档", "还没有「自由截图」目录，先去截几张图。", parent=self)
-            return
+            if not silent:
+                messagebox.showinfo("整理文档", "还没有「自由截图」目录，先去截几张图。", parent=self)
+            return 0
+
+        # 本轮截图：优先用主程序记录的本轮文件列表；没有就按本轮起点时间过滤
+        session_files = list(getattr(self.owner, "free_session_files", []) or [])
+        session_start = getattr(self.owner, "free_session_start", None)
+
+        all_jpg = sorted(folder.glob("*.jpg"))
+        if only_session:
+            if session_files:
+                paths = [p for p in session_files if Path(p).exists()]
+            elif session_start:
+                paths = [p for p in all_jpg if p.stat().st_mtime >= session_start]
+            else:
+                paths = []  # 还没截过本轮 → 不自动塞历史图
+        else:
+            paths = all_jpg
+
+        if not paths:
+            if not silent:
+                tip = "这一轮还没有自由截图。点「自由截图」去截几张，或点「全部历史截图」加载以前的。" \
+                      if only_session else "「自由截图」目录是空的。"
+                messagebox.showinfo("整理文档", tip, parent=self)
+            return 0
+
         self._sync_captions()
+        # 去重：已在列表里的不重复加
+        existing = {str(Path(it["path"]).resolve()) for it in self.items}
         added = 0
-        for p in sorted(folder.glob("*.jpg")):
-            self.items.append({"path": p, "caption": ""})
+        for p in paths:
+            if str(Path(p).resolve()) in existing:
+                continue
+            self.items.append({"path": Path(p), "caption": ""})
             added += 1
         self.render_list()
-        self.status_var.set(f"已加载 {added} 张自由截图。")
+        scope = "本轮" if only_session else "全部"
+        self.status_var.set(f"已加载{scope} {added} 张自由截图。")
+        return added
 
     def clear_items(self):
         self.items = []
@@ -1250,26 +1453,241 @@ class ExportDocWindow(tk.Toplevel):
         for w in self.list_frame.winfo_children():
             w.destroy()
         self.thumb_refs = []
+        self._row_frames = []
         for i, it in enumerate(self.items):
             row = tk.Frame(self.list_frame, bg=COLOR_CARD, highlightbackground="#dde7e1", highlightthickness=1)
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=str(i + 1), bg=COLOR_CARD, fg=COLOR_MUTED, width=3).pack(side="left", padx=4)
-            try:
-                thumb = Image.open(it["path"])
-                thumb.thumbnail((72, 72))
-                photo = ImageTk.PhotoImage(thumb)
+            self._row_frames.append(row)
+
+            # 两段式布局，彻底避免横向溢出：
+            #   左块（固定宽）= 手柄 + 序号 + 缩略图 + 操作按钮组（按钮在缩略图下方竖排）
+            #   右块（fill x）= 多行说明框
+            # 第 1 列：拖动手柄 + 序号（竖排，窄）
+            grip = tk.Frame(row, bg=COLOR_CARD)
+            grip.pack(side="left", padx=(4, 0), pady=4)
+            handle = tk.Label(grip, text="⠿", bg=COLOR_CARD, fg=COLOR_MUTED,
+                              font=("Microsoft YaHei UI", 14), cursor="fleur", width=2)
+            handle.pack(side="top")
+            seq = tk.Label(grip, text=str(i + 1), bg=COLOR_CARD, fg=COLOR_MUTED, width=2,
+                           font=("Microsoft YaHei UI", 11, "bold"))
+            seq.pack(side="top", pady=(2, 0))
+
+            # 第 2 列：大预览图（512 上限），方便看清内容再写描述
+            photo = self._thumb_cache.get(str(it["path"])) if hasattr(self, "_thumb_cache") else None
+            if photo is None:
+                try:
+                    thumb = Image.open(it["path"])
+                    thumb.thumbnail((512, 512))
+                    photo = ImageTk.PhotoImage(thumb)
+                    if not hasattr(self, "_thumb_cache"):
+                        self._thumb_cache = {}
+                    self._thumb_cache[str(it["path"])] = photo
+                except Exception:
+                    photo = None
+            if photo is not None:
                 self.thumb_refs.append(photo)
-                tk.Label(row, image=photo, bg=COLOR_CARD).pack(side="left", padx=4, pady=4)
-            except Exception:
-                tk.Label(row, text="?", bg=COLOR_CARD, width=9).pack(side="left", padx=4)
-            entry = tk.Entry(row)
-            entry.insert(0, it.get("caption", ""))
-            entry.pack(side="left", fill="x", expand=True, padx=6)
+                thumb_lbl = tk.Label(row, image=photo, bg=COLOR_CARD)
+                thumb_lbl.pack(side="left", padx=8, pady=4)
+            else:
+                thumb_lbl = tk.Label(row, text="图片打不开", bg=COLOR_CARD, fg=COLOR_MUTED, width=12)
+                thumb_lbl.pack(side="left", padx=8, pady=4)
+
+            # 第 3 列：提示框 + 说明框 + 操作按钮（竖排，填满剩余宽度）
+            right = tk.Frame(row, bg=COLOR_CARD)
+            right.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+
+            # 操作按钮一排（AI / ↑ / ↓ / ✕）
+            btns = tk.Frame(right, bg=COLOR_CARD)
+            btns.pack(fill="x")
+            ai_btn = tk.Button(btns, text="✨ AI 描述这张图", command=lambda i=i: self._ai_describe(i),
+                               bd=0, bg=COLOR_GREEN_SOFT, fg=COLOR_GREEN_DARK,
+                               activebackground="#d7f3e3", cursor="hand2",
+                               font=("Microsoft YaHei UI", 10, "bold"), padx=10, pady=3)
+            ai_btn.pack(side="left")
+            it["_ai_btn"] = ai_btn
+
+            # 每张图单独选在文档里的宽度（A4 比例），改了立即写回该 item
+            tk.Label(btns, text="文档宽度", bg=COLOR_CARD, fg=COLOR_MUTED,
+                     font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(12, 2))
+            sz_label = {"full": "全宽", "two_third": "三分之二",
+                        "half": "二分之一", "quarter": "四分之一"}.get(it.get("size", "full"), "全宽")
+            sz_var = tk.StringVar(value=sz_label)
+            it["_size_var"] = sz_var
+            def _on_size(idx=i, var=sz_var):
+                m = {"全宽": "full", "三分之二": "two_third", "二分之一": "half", "四分之一": "quarter"}
+                self.items[idx]["size"] = m.get(var.get(), "full")
+            cb = ttk.Combobox(btns, textvariable=sz_var, state="readonly", width=8,
+                              values=["全宽", "三分之二", "二分之一", "四分之一"])
+            cb.pack(side="left")
+            cb.bind("<<ComboboxSelected>>", lambda e, f=_on_size: f())
+
+            tk.Button(btns, text="✕ 删除", command=lambda i=i: self.remove(i), bd=0, bg=COLOR_CARD,
+                      fg="#c0392b", cursor="hand2", padx=8,
+                      font=("Microsoft YaHei UI", 9)).pack(side="right")
+            tk.Button(btns, text="↓", command=lambda i=i: self.move(i, 1), bd=0, bg=COLOR_CARD,
+                      width=2, cursor="hand2").pack(side="right")
+            tk.Button(btns, text="↑", command=lambda i=i: self.move(i, -1), bd=0, bg=COLOR_CARD,
+                      width=2, cursor="hand2").pack(side="right")
+
+            # 提示框（单行）
+            hint_row = tk.Frame(right, bg=COLOR_CARD)
+            hint_row.pack(fill="x", pady=(6, 0))
+            tk.Label(hint_row, text="给AI的提示：", bg=COLOR_CARD, fg=COLOR_MUTED,
+                     font=("Microsoft YaHei UI", 9)).pack(side="left")
+            hint_entry = tk.Entry(hint_row, font=("Microsoft YaHei UI", 10),
+                                  relief="solid", bd=1, width=42)
+            hint_entry.insert(0, it.get("hint", ""))
+            hint_entry.pack(side="left", padx=(2, 0))
+            it["_hint_entry"] = hint_entry
+
+            # 说明文字（最终进文档）；AI 描述结果填到这里。
+            # 限定宽度（width=46 字符），不撑满整屏，读写更舒适。
+            entry = tk.Text(right, height=5, width=46, wrap="word", font=("Microsoft YaHei UI", 10),
+                            relief="solid", bd=1, highlightthickness=0)
+            entry.insert("1.0", it.get("caption", ""))
+            entry.pack(anchor="w", pady=(4, 0))
             it["_entry"] = entry
-            tk.Button(row, text="↑", command=lambda i=i: self.move(i, -1), bd=0, bg=COLOR_CARD, width=2).pack(side="left")
-            tk.Button(row, text="↓", command=lambda i=i: self.move(i, 1), bd=0, bg=COLOR_CARD, width=2).pack(side="left")
-            tk.Button(row, text="✕", command=lambda i=i: self.remove(i), bd=0, bg=COLOR_CARD, fg="#c0392b", width=2).pack(side="left", padx=(0, 4))
+
+            # 在手柄、序号、缩略图上启用拖拽重排（避开 Entry，免得抢输入焦点）
+            for w in (handle, seq, thumb_lbl):
+                w.bind("<ButtonPress-1>", lambda e, i=i: self._drag_start(i))
+                w.bind("<B1-Motion>", self._drag_motion)
+                w.bind("<ButtonRelease-1>", self._drag_drop)
         self.count_label.configure(text=f"共 {len(self.items)} 张")
+
+    # ───── 鼠标拖拽重排 ─────
+    def _drag_start(self, index):
+        self._drag_index = index
+        self._drag_target = index
+        # 高亮被拖的行
+        try:
+            self._row_frames[index].configure(highlightbackground=COLOR_GREEN, highlightthickness=2)
+        except Exception:
+            pass
+
+    def _drag_motion(self, event):
+        if getattr(self, "_drag_index", None) is None:
+            return
+        # 鼠标在 list_frame 里的绝对 y，落在哪一行就把那行标为目标
+        try:
+            y_root = event.y_root
+            target = self._drag_index
+            for idx, row in enumerate(self._row_frames):
+                top = row.winfo_rooty()
+                bottom = top + row.winfo_height()
+                if top <= y_root <= bottom:
+                    target = idx
+                    break
+            else:
+                # 拖到最顶/最底之外
+                if self._row_frames and y_root < self._row_frames[0].winfo_rooty():
+                    target = 0
+                elif self._row_frames:
+                    target = len(self._row_frames) - 1
+            if target != getattr(self, "_drag_target", target):
+                # 更新落点提示高亮
+                for idx, row in enumerate(self._row_frames):
+                    if idx == self._drag_index:
+                        continue
+                    hl = COLOR_CYAN if idx == target else "#dde7e1"
+                    th = 2 if idx == target else 1
+                    try:
+                        row.configure(highlightbackground=hl, highlightthickness=th)
+                    except Exception:
+                        pass
+                self._drag_target = target
+        except Exception:
+            pass
+
+    def _drag_drop(self, event):
+        src = getattr(self, "_drag_index", None)
+        dst = getattr(self, "_drag_target", None)
+        self._drag_index = None
+        self._drag_target = None
+        if src is None or dst is None or src == dst:
+            self.render_list()  # 复位高亮
+            return
+        self._sync_captions()
+        item = self.items.pop(src)
+        self.items.insert(dst, item)
+        self.render_list()
+
+    # ───── AI 图片描述 ─────
+    def _ai_describe(self, index):
+        """对某张图调用后端 AI：结合用户已填的简介，生成详细说明并回填。"""
+        self._sync_captions()
+        if not (0 <= index < len(self.items)):
+            return
+        it = self.items[index]
+        token = getattr(self.owner, "server_token", "")
+        if not token:
+            messagebox.showinfo(
+                "AI 描述",
+                "还没登记软件编号，无法使用 AI 描述。\n请先在主界面登记/同步设备。",
+                parent=self)
+            return
+
+        path = Path(it["path"])
+        # 优先用「给AI的提示」框；没填则退回用已有说明文字当提示
+        hint = it.get("hint", "").strip() or it.get("caption", "").strip()
+        server_url = self.owner.server_url_var.get()
+
+        # 禁用按钮 + 提示，后台线程跑，避免卡界面
+        btn = it.get("_ai_btn")
+        if btn is not None:
+            try:
+                btn.configure(state="disabled", text="生成中…")
+            except tk.TclError:
+                pass
+        self.status_var.set(f"正在为第 {index + 1} 张图生成 AI 描述…")
+
+        def worker():
+            try:
+                result = server_describe_image(server_url, token, path, hint=hint, style="detail")
+                desc = result.get("description", "").strip()
+                self.after(0, lambda: self._apply_ai_desc(index, desc, result))
+            except Exception as exc:
+                msg = str(exc)
+                self.after(0, lambda: self._ai_desc_failed(index, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_ai_desc(self, index, desc, result):
+        if not (0 <= index < len(self.items)):
+            return
+        if not desc:
+            self._ai_desc_failed(index, "AI 返回了空描述，请重试。")
+            return
+        # 回填到数据 + 输入框
+        self.items[index]["caption"] = desc
+        entry = self.items[index].get("_entry")
+        if entry is not None:
+            try:
+                entry.delete("1.0", "end")
+                entry.insert("1.0", desc)
+            except tk.TclError:
+                pass
+        btn = self.items[index].get("_ai_btn")
+        if btn is not None:
+            try:
+                btn.configure(state="normal", text="✨重写")
+            except tk.TclError:
+                pass
+        charged = result.get("charged")
+        tail = "（已扣 1 次额度）" if charged else "（当前免费）"
+        self.status_var.set(f"第 {index + 1} 张图 AI 描述已生成 {tail}")
+
+    def _ai_desc_failed(self, index, msg):
+        btn = None
+        if 0 <= index < len(self.items):
+            btn = self.items[index].get("_ai_btn")
+        if btn is not None:
+            try:
+                btn.configure(state="normal", text="✨AI描述")
+            except tk.TclError:
+                pass
+        self.status_var.set("AI 描述失败。")
+        messagebox.showwarning("AI 描述", f"生成失败：{msg}", parent=self)
 
     def _collect(self):
         self._sync_captions()
@@ -1277,7 +1695,8 @@ class ExportDocWindow(tk.Toplevel):
         for it in self.items:
             try:
                 with Image.open(it["path"]) as im:
-                    loaded.append((im.convert("RGB"), it.get("caption", "")))
+                    # 每张图带自己的尺寸档位（默认 full）
+                    loaded.append((im.convert("RGB"), it.get("caption", ""), it.get("size", "full")))
             except Exception as exc:
                 self.owner.log(f"读取图片失败 {Path(it['path']).name}：{exc}")
         return loaded
@@ -1293,7 +1712,8 @@ class ExportDocWindow(tk.Toplevel):
             messagebox.showinfo("整理文档", "请先添加截图。", parent=self)
             return
         try:
-            image = build_long_image(self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items)
+            wm = not bool(getattr(self.owner, "is_paid_user", False))
+            image = build_long_image(self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items, watermark=wm)
             name = safe_folder_name(self.title_var.get(), "使用说明")
             out = self._out_dir() / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.jpg"
             image.save(out, "JPEG", quality=92)
@@ -1312,7 +1732,8 @@ class ExportDocWindow(tk.Toplevel):
         try:
             name = safe_folder_name(self.title_var.get(), "使用说明")
             out = self._out_dir() / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.pdf"
-            build_doc_pdf(out, self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items)
+            wm = not bool(getattr(self.owner, "is_paid_user", False))
+            build_doc_pdf(out, self.title_var.get(), self.intro_text.get("1.0", "end").strip(), items, watermark=wm)
             self.status_var.set(f"已导出 PDF：{out.name}")
             self.owner.log(f"已导出 PDF：{out}")
             os.startfile(str(out.parent))
@@ -2007,6 +2428,9 @@ class SnapSaverApp:
         self.free_mode = False
         self.free_count = 0
         self.free_panel = None
+        # 本轮自由截图的起点时间戳（整理文档时默认只加载这之后截的图）
+        self.free_session_start = None
+        self.free_session_files = []  # 本轮截的图路径（按顺序）
         self.main_count_var = tk.IntVar(value=int(config.get("main_count", 1) or 1))
         self.detail_count_var = tk.IntVar(value=int(config.get("detail_count", 3) or 3))
         self.prefix_var = tk.StringVar(value=str(config.get("prefix", "pic")))
@@ -2024,6 +2448,7 @@ class SnapSaverApp:
         self.hook_state_var = tk.StringVar(value="")
         self.device_state_var = tk.StringVar(value="设备：未登记" if not self.server_token else "设备：已登记")
         self.quota_var = tk.StringVar(value="图片额度：未同步")
+        self.is_paid_user = False  # 充值用户导出不打试用水印（同步额度后更新）
 
         self.configure_style()
         self.build_ui()
@@ -2148,8 +2573,13 @@ class SnapSaverApp:
         ttk.Entry(svc, textvariable=self.server_url_var).grid(row=1, column=1, sticky="ew", pady=(8, 0))
         ttk.Button(svc, text="同步额度", command=self.sync_quota).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
 
-        ttk.Label(svc, textvariable=self.device_state_var, style="CardHint.TLabel").grid(
-            row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        svc_btns = ttk.Frame(svc)
+        svc_btns.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(svc_btns, textvariable=self.device_state_var, style="CardHint.TLabel").pack(side="left")
+        tk.Button(svc_btns, text="💰 充值续费", command=self.open_recharge,
+                  bd=0, bg=COLOR_GREEN, fg="#ffffff", activebackground=COLOR_GREEN_DARK,
+                  cursor="hand2", padx=12, pady=3,
+                  font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(12, 0))
 
         # 操作栏：导入 | 截图 ┄┄ 修复类型 + AI 修复（右对齐）
         toolbar = ttk.Frame(root, padding=(20, 0, 20, 8))
@@ -2243,6 +2673,95 @@ class SnapSaverApp:
         self.root.clipboard_append(value)
         self.set_status(f"已复制软件编号：{value}")
 
+    def _resolve_pay_qr(self):
+        """找收款码图片：优先 PyInstaller 解压目录，其次 exe 同级，最后源码同级。"""
+        cands = []
+        if getattr(sys, "frozen", False):
+            cands.append(Path(getattr(sys, "_MEIPASS", "")) / "pay_qr.png")
+            cands.append(Path(sys.executable).resolve().parent / "pay_qr.png")
+        cands.append(Path(__file__).resolve().parent / "pay_qr.png")
+        for p in cands:
+            try:
+                if p and p.exists():
+                    return p
+            except Exception:
+                continue
+        return None
+
+    def _software_tail8(self) -> str:
+        """软件编号去分隔符后的后 8 位（充值备注用，完整编号太长）。"""
+        s = "".join(ch for ch in self.software_id_var.get() if ch.isalnum())
+        return s[-8:] if len(s) >= 8 else s
+
+    def open_recharge(self):
+        """弹出充值续费对话框：支付宝收款码 + 备注编号（编号后 8 位）。"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("充值续费")
+        dlg.configure(bg=COLOR_BG)
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+
+        wrap = tk.Frame(dlg, bg=COLOR_BG)
+        wrap.pack(padx=20, pady=18)
+        tk.Label(wrap, text="支付宝扫码转账，到账后联系客服为你充值额度",
+                 bg=COLOR_BG, fg=COLOR_TEXT, font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w")
+
+        body = tk.Frame(wrap, bg=COLOR_BG)
+        body.pack(fill="x", pady=(12, 0))
+
+        # 左：收款码
+        qr_path = self._resolve_pay_qr()
+        qr_box = tk.Frame(body, bg="#ffffff", highlightbackground=COLOR_BORDER,
+                          highlightthickness=1, width=200, height=200)
+        qr_box.pack(side="left")
+        qr_box.pack_propagate(False)
+        self._recharge_qr_img = None
+        if qr_path is not None:
+            try:
+                img = Image.open(qr_path)
+                img.thumbnail((184, 184))
+                self._recharge_qr_img = ImageTk.PhotoImage(img)
+                tk.Label(qr_box, image=self._recharge_qr_img, bg="#ffffff").pack(expand=True)
+            except Exception:
+                self._recharge_qr_img = None
+        if self._recharge_qr_img is None:
+            tk.Label(qr_box, text="收款码未配置", bg="#ffffff", fg=COLOR_MUTED,
+                     font=("Microsoft YaHei UI", 10)).pack(expand=True)
+
+        # 右：备注说明
+        right = tk.Frame(body, bg=COLOR_BG)
+        right.pack(side="left", fill="both", expand=True, padx=(18, 0))
+        tail = self._software_tail8()
+        tk.Label(right, text="⚠️ 转账时务必在「备注 / 留言」里填写下面的编号：",
+                 bg=COLOR_BG, fg="#c2410c", justify="left", wraplength=260,
+                 font=("Microsoft YaHei UI", 10)).pack(anchor="w")
+        note = tk.Frame(right, bg="#fef9c3")
+        note.pack(anchor="w", fill="x", pady=(8, 8))
+        tk.Label(note, text="备注：", bg="#fef9c3", fg=COLOR_TEXT,
+                 font=("Microsoft YaHei UI", 10)).pack(side="left", padx=(10, 2), pady=8)
+        tk.Label(note, text=tail, bg="#fef9c3", fg="#c0392b",
+                 font=("Consolas", 16, "bold")).pack(side="left", pady=8)
+
+        def copy_note():
+            self.root.clipboard_clear(); self.root.clipboard_append(tail)
+            self.set_status(f"已复制备注编号：{tail}")
+        tk.Button(right, text="复制备注编号", command=copy_note,
+                  bd=0, bg=COLOR_GREEN, fg="#ffffff", activebackground=COLOR_GREEN_DARK,
+                  cursor="hand2", padx=12, pady=4,
+                  font=("Microsoft YaHei UI", 9, "bold")).pack(anchor="w")
+        tk.Label(right, text="（编号是你软件编号的后 8 位；\n充值、续费、定制需求也可加客服微信 18033086531）",
+                 bg=COLOR_BG, fg=COLOR_MUTED, justify="left", wraplength=260,
+                 font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(8, 0))
+
+        dlg.update_idletasks()
+        # 居中到主窗口
+        try:
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - dlg.winfo_width()) // 2
+            y = self.root.winfo_rooty() + 80
+            dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
     def _save_keep_original(self):
         keep = bool(self.keep_original_var.get())
         save_config({"keep_original": keep})
@@ -2258,6 +2777,8 @@ class SnapSaverApp:
             free = int(quota.get("free") or 0)
             paid = int(quota.get("paid") or 0)
             self.quota_var.set(f"图片额度：剩余 {available} 张（默认 {free} / 充值 {paid}）")
+            # 记录付费状态：充值过(paid>0)的用户导出文档不打试用水印
+            self.is_paid_user = paid > 0
 
     def register_device(self, silent: bool = False) -> bool:
         software_id = self.software_id_var.get().strip()
@@ -2601,6 +3122,9 @@ class SnapSaverApp:
         self.free_mode = True
         self.free_count = 0
         self.free_count_var.set("本次自由截图：0 张")
+        # 记录本轮起点：整理文档默认只收这之后的图（减 2 秒容差，防止边界图漏掉）
+        self.free_session_start = time.time() - 2
+        self.free_session_files = []
         self.hook_polling = True
         self.root.after(15, self.poll_hook)
         self.hook_state_var.set("● 自由截图中：按住 Ctrl 拖动")
@@ -2662,6 +3186,7 @@ class SnapSaverApp:
             image = image.convert("RGB")
         image.save(target, "JPEG", quality=int(self.quality_var.get() or 95))
         self.free_count += 1
+        self.free_session_files.append(target)
         self.free_count_var.set(f"本次自由截图：{self.free_count} 张")
         self.log(f"已存：自由截图/{target.name}（{image.width}x{image.height}）")
 

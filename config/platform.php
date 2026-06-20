@@ -18,4 +18,7 @@ return [
     'user_token_days' => (int) env('USER_TOKEN_DAYS', 30),
     'admin_token_days' => (int) env('ADMIN_TOKEN_DAYS', 7),
     'allow_local_fallback' => filter_var(env('AI_ALLOW_LOCAL_FALLBACK', true), FILTER_VALIDATE_BOOLEAN),
+    // AI 图片描述（PDF 排版用）是否扣额度。默认 false=免费期：不扣额度只记调用日志；
+    // 将来要收费时把 DOC_DESCRIBE_CHARGE 设为 true 即按 1 次/张扣费，前端无需改动。
+    'doc_describe_charge' => filter_var(env('DOC_DESCRIBE_CHARGE', false), FILTER_VALIDATE_BOOLEAN),
 ];

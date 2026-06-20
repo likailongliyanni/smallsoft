@@ -39,6 +39,7 @@ Route::post('/desktop/device/register', [DesktopDeviceController::class, 'regist
 Route::get('/desktop/device/status', [DesktopDeviceController::class, 'status']);
 Route::post('/desktop/watermark/detect', [DesktopWatermarkController::class, 'detect']);
 Route::post('/desktop/watermark/remove', [DesktopWatermarkController::class, 'remove']);
+Route::post('/desktop/doc/describe-image', [DesktopWatermarkController::class, 'describeImage']);
 Route::post('/excel-automation/image-extract/plan', [SpreadsheetImageController::class, 'plan']);
 Route::post('/excel-automation/table-merge/plan', [TableMergeController::class, 'plan']);
 Route::post('/excel-automation/table-tidy/plan', [TableTidyController::class, 'plan']);

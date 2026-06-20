@@ -36,3 +36,20 @@ Thumbs.db
 
 desktop/snap-saver/截图存图助手配置.json
 desktop/snap-saver/截图存图助手错误日志.txt
+desktop/snap-saver/存图结果/
+
+# ── 桌面端：Python 打包产物 / 缓存 / 用户数据，一律不入库 ──
+**/__pycache__/
+*.pyc
+desktop/**/dist/
+desktop/**/build/
+desktop/**/dist_nuitka/
+desktop/**/main.build/
+desktop/**/main.dist/
+desktop/**/*.dist/
+desktop/**/nuitka-crash-report.xml
+desktop/**/build_log.txt
+desktop/**/_build_out.txt
+# 录制流程 / 运行时数据（用户数据，不入库）
+desktop/software_v2/flows/
+desktop/software_v2/python/

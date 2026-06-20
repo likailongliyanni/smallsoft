@@ -5,7 +5,7 @@ a = Analysis(
     ['snap_saver.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('pay_qr.png', '.')],
     hiddenimports=['openpyxl', 'PIL.ImageTk', 'PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
