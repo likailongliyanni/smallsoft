@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>智能截图软件</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h2l2-2h6l2 2h2a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        </div>
+        <div>
+          <div class="brand-title">智能截图软件</div>
+          <div class="brand-sub">按住 Ctrl 拖动框选，松开自动保存</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span class="badge badge-ok"><span class="badge-dot"></span>已就绪</span>
+        <span class="quota">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg>
+          额度 <strong id="quotaNum" style="font-weight:600">54</strong> 张
+        </span>
+      </div>
+    </header>
+
+    <!-- 主体 -->
+    <main class="main">
+
+      <!-- 两张设置卡 -->
+      <div class="cards-row">
+        <div class="card">
+          <div class="card-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            采集设置
+          </div>
+          <div class="field-label">输出目录</div>
+          <div class="field-row">
+            <input type="text" value="D:\存图结果" readonly />
+            <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
+            服务与额度
+          </div>
+          <div class="field-label">软件编号</div>
+          <div class="field-row">
+            <span class="mono-box" id="serial">00-FF-06-9E-A6-E2</span>
+            <button class="btn btn-icon" id="copySerial" title="复制编号"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+            <button class="btn" id="syncBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 0 1 13-6m3 2V4m0 0h-4M20 12a8 8 0 0 1-13 6m-3-2v4m0 0h4"/></svg>同步额度</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar">
+        <button class="btn btn-blue"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>开始截图</button>
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 3v4H2m4 0h12a2 2 0 0 1 2 2v9m0 0h-4m4 0v4M3 6v12a2 2 0 0 0 2 2h12"/></svg>自由截图</button>
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M21 15V8a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7"/><path d="M16 19h6M19 16v6"/></svg>导入图片</button>
+        <div class="toolbar-divider"></div>
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/><path d="M18 13l.8 2L21 16l-2.2 1-.8 2-.8-2L15 16l2.2-1z"/></svg>AI 智能修复</button>
+        <div class="spacer"></div>
+        <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>整理成文档</button>
+      </div>
+
+      <!-- 截图进度列表 -->
+      <div class="list-head">
+        <div class="list-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+          截图进度
+        </div>
+        <span class="list-count">共 3 张</span>
+      </div>
+
+      <div class="shot-list">
+        <div class="shot">
+          <div class="shot-thumb thumb-blue"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
+          <div class="shot-info"><div class="shot-name">商品主图_01.jpg</div><div class="shot-meta">1600 × 1000 · 全宽排版</div></div>
+          <span class="pill pill-ok">✓ 已描述</span>
+        </div>
+        <div class="shot">
+          <div class="shot-thumb thumb-amber"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
+          <div class="shot-info"><div class="shot-name">详情页_02.jpg</div><div class="shot-meta">800 × 1200 · 图左文右环绕</div></div>
+          <span class="pill pill-run">⟳ 生成中</span>
+        </div>
+        <div class="shot">
+          <div class="shot-thumb thumb-gray"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
+          <div class="shot-info"><div class="shot-name">细节图_03.jpg</div><div class="shot-meta">1200 × 800 · 二分之一</div></div>
+          <button class="btn" style="font-size:12px;padding:6px 12px"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" transform="translate(3 2)"/></svg>AI 描述</button>
+        </div>
+      </div>
+
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+build/
+dist/
+__pycache__/
+*.bak
+截图存图助手配置.json

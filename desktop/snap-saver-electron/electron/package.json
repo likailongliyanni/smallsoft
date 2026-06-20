@@ -1,0 +1,14 @@
+{
+  "name": "snap-saver-electron",
+  "version": "1.0.0",
+  "description": "智能截图软件 (Electron 界面版)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "好办法",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^33.4.11"
+  }
+}
