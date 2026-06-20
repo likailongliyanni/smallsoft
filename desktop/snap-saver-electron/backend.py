@@ -166,6 +166,42 @@ def cmd_open_path(args):
     return {"ok": True}
 
 
+def cmd_repair_modes(args):
+    """返回 AI 修复的 5 种模式（去水印/去贴纸/去广告/清爽化/白底上图）。"""
+    return {"modes": [{"key": k, "label": v} for k, v in S.REPAIR_MODES]}
+
+
+def _ensure_token():
+    if not _STATE["token"]:
+        data = S.server_register_device(_server_url(), S.local_software_id())
+        _STATE["token"] = str(data.get("token") or "")
+
+
+def cmd_repair_image(args):
+    """对一张图做 AI 修复（去水印/白底等）。
+    args: {path, mode, keep_original}
+    返回 {out} 处理后图片路径。修复后默认覆盖原图，keep_original=true 则原图备份。"""
+    import threading
+    import tempfile as _tf
+    _ensure_token()
+    src = Path(args.get("path") or "")
+    mode = str(args.get("mode") or "watermark")
+    keep = bool(args.get("keep_original", False))
+    if not src.exists():
+        raise RuntimeError("图片不存在。")
+
+    # 输出：AI修复 目录下，文件名加 _修复 后缀（不覆盖原图，更安全，界面能对比）
+    out_dir = Path(S.app_dir()) / "存图结果" / "AI修复"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / (src.stem + "_修复.jpg")
+
+    stop = threading.Event()
+    with _tf.TemporaryDirectory(prefix="snap_repair_") as tmp:
+        S.server_remove_watermark_to(
+            _server_url(), _STATE["token"], src, target, Path(tmp), mode, stop)
+    return {"out": str(target), "dir": str(out_dir)}
+
+
 HANDLERS = {
     "ping": cmd_ping,
     "get_serial": cmd_get_serial,
@@ -175,6 +211,8 @@ HANDLERS = {
     "describe_image": cmd_describe_image,
     "export_doc": cmd_export_doc,
     "open_path": cmd_open_path,
+    "repair_modes": cmd_repair_modes,
+    "repair_image": cmd_repair_image,
 }
 
 

@@ -203,3 +203,14 @@ select {
   border-radius: 7px; background: var(--surface); font-family: inherit; cursor: pointer;
 }
 .doc-empty { text-align: center; color: var(--hint); font-size: 13px; padding: 40px 0; }
+
+/* ── AI 修复 前后对比 ── */
+.repair-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
+.repair-pane { display: flex; flex-direction: column; gap: 6px; }
+.repair-tag { font-size: 12px; color: var(--muted); font-weight: 500; }
+.repair-img-wrap {
+  border: 1px solid var(--border); border-radius: var(--radius); background: #f1f5f3;
+  min-height: 260px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.repair-img-wrap img { max-width: 100%; max-height: 360px; display: block; object-fit: contain; }
+.repair-spin { font-size: 13px; color: var(--muted); }

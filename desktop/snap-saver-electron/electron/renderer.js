@@ -189,4 +189,73 @@ async function docExport(format) {
 $("docExportPdf")?.addEventListener("click", () => docExport("pdf"));
 $("docExportLong")?.addEventListener("click", () => docExport("long"));
 
+// ───────────────────────── AI 智能修复 ─────────────────────────
+let repairPath = "";
+let repairOutPath = "";
+
+async function openRepair() {
+  $("repairModal").style.display = "flex";
+  // 拉修复模式填充下拉
+  const sel = $("repairMode");
+  if (sel && !sel.dataset.loaded) {
+    try {
+      const r = await window.snapAPI.backend("repair_modes");
+      if (r.ok && r.data?.modes) {
+        sel.innerHTML = r.data.modes.map((m) => `<option value="${m.key}">${m.label}</option>`).join("");
+        sel.dataset.loaded = "1";
+      }
+    } catch {}
+  }
+}
+function closeRepair() { $("repairModal").style.display = "none"; }
+$("repairBtn")?.addEventListener("click", openRepair);
+$("repairClose")?.addEventListener("click", closeRepair);
+$("repairModal")?.addEventListener("click", (e) => { if (e.target.id === "repairModal") closeRepair(); });
+
+$("repairPick")?.addEventListener("click", async () => {
+  const paths = await window.snapAPI.pickImages();
+  if (!paths.length) return;
+  repairPath = paths[0];
+  const thumb = await window.snapAPI.readThumb(repairPath);
+  $("repairBefore").innerHTML = `<img src="${thumb}" alt="原图" />`;
+  $("repairAfter").innerHTML = '<span class="doc-empty">点「开始修复」</span>';
+  $("repairRun").disabled = false;
+  $("repairOpen").disabled = true;
+  $("repairStatus").textContent = repairPath.split(/[\\/]/).pop();
+});
+
+$("repairRun")?.addEventListener("click", async () => {
+  if (!repairPath) return;
+  const mode = $("repairMode").value || "watermark";
+  const runBtn = $("repairRun");
+  runBtn.disabled = true;
+  $("repairAfter").innerHTML = '<span class="repair-spin">AI 修复中，请稍候（约 10-40 秒）…</span>';
+  $("repairStatus").textContent = "正在修复…";
+  try {
+    const r = await window.snapAPI.backend("repair_image", { path: repairPath, mode });
+    if (r.ok && r.data?.out) {
+      repairOutPath = r.data.out;
+      const thumb = await window.snapAPI.readThumb(repairOutPath);
+      $("repairAfter").innerHTML = `<img src="${thumb}" alt="修复后" />`;
+      $("repairStatus").textContent = "修复完成：" + repairOutPath.split(/[\\/]/).pop();
+      $("repairOpen").disabled = false;
+    } else {
+      $("repairAfter").innerHTML = '<span class="doc-empty">修复失败</span>';
+      $("repairStatus").textContent = "修复失败：" + (r.error || "请重试");
+    }
+  } catch (e) {
+    $("repairAfter").innerHTML = '<span class="doc-empty">修复失败</span>';
+    $("repairStatus").textContent = "修复失败：" + e.message;
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+$("repairOpen")?.addEventListener("click", () => {
+  if (repairOutPath) {
+    const dir = repairOutPath.replace(/[\\/][^\\/]+$/, "");
+    window.snapAPI.backend("open_path", { path: dir });
+  }
+});
+
 window.addEventListener("DOMContentLoaded", init);
