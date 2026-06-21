@@ -174,6 +174,7 @@ class CaptureWorker:
     def __init__(self):
         self.hook = None
         self.active = False
+        self.free_mode = False   # 自由截图模式：不归类、不翻页，直接存自由截图目录
         self.rows = []           # [{name, link}]
         self.index = 0
         self.main_count = 1
@@ -183,6 +184,45 @@ class CaptureWorker:
         self.gesture_start = None
         self._poll_thread = None
         self.out_dir = Path(S.app_dir()) / "存图结果"
+
+    def start_free(self):
+        """自由截图：装钩子，Ctrl 拖框随手截，存到「自由截图」目录。"""
+        if self.active:
+            return {"ok": True, "msg": "已在采集中"}
+        self.free_mode = True
+        self.hook = S.CtrlDragHook()
+        ok = self.hook.install()
+        if not ok:
+            self.free_mode = False
+            raise RuntimeError(self.hook.last_error or "截图钩子启用失败，可能被安全软件拦截。")
+        self.active = True
+        self._poll_thread = _threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+        return {"ok": True}
+
+    def _save_free(self, sx, sy, ex, ey):
+        left, top = min(sx, ex), min(sy, ey)
+        right, bottom = max(sx, ex), max(sy, ey)
+        if right - left < 5 or bottom - top < 5:
+            return
+        from PIL import ImageGrab
+        self.hook.enabled = False
+        try:
+            img = ImageGrab.grab(bbox=(int(left), int(top), int(right), int(bottom)), all_screens=True)
+        finally:
+            self.hook.enabled = True
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        out_dir = self.out_dir / "自由截图"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = S.time.strftime("%Y%m%d-%H%M%S")
+        target = out_dir / f"截图_{stamp}.jpg"
+        idx = 2
+        while target.exists():
+            target = out_dir / f"截图_{stamp}-{idx}.jpg"; idx += 1
+        img.save(target, "JPEG", quality=95)
+        _push_event("capture_saved", path=str(target), name=target.name,
+                    w=img.width, h=img.height, row_name="自由截图", category="")
 
     def counts_for(self, i):
         return self.counts.setdefault(i, [0, 0])
@@ -215,6 +255,7 @@ class CaptureWorker:
 
     def stop(self):
         self.active = False
+        self.free_mode = False
         if self.hook:
             try:
                 self.hook.uninstall()
@@ -254,7 +295,10 @@ class CaptureWorker:
                         sx, sy = self.gesture_start
                         self.gesture_start = None
                         _push_event("capture_drag_end")
-                        self._do_capture(sx, sy, x, y)
+                        if self.free_mode:
+                            self._save_free(sx, sy, x, y)
+                        else:
+                            self._do_capture(sx, sy, x, y)
             except Exception as e:
                 _push_event("capture_error", error=str(e))
 
@@ -347,6 +391,16 @@ def cmd_capture_set_category(args):
 def cmd_capture_next_row(args):
     _WORKER.next_row()
     return {"ok": True}
+
+
+def cmd_import_rows_file(args):
+    """从 Excel/CSV/txt 文件读「名称+链接」列表。args: {path}"""
+    p = Path(args.get("path") or "")
+    if not p.exists():
+        raise RuntimeError("文件不存在。")
+    raw = S.read_import_rows(p)  # 返回 [(name, link), ...] 元组列表
+    rows = [{"name": t[0], "link": t[1] if len(t) > 1 else ""} for t in raw]
+    return {"rows": rows}
 
 
 def cmd_parse_rows(args):
@@ -444,10 +498,12 @@ HANDLERS = {
     "repair_image": cmd_repair_image,
     "save_capture": cmd_save_capture,
     "parse_rows": cmd_parse_rows,
+    "import_rows_file": cmd_import_rows_file,
     "capture_start": cmd_capture_start,
     "capture_stop": cmd_capture_stop,
     "capture_set_category": cmd_capture_set_category,
     "capture_next_row": cmd_capture_next_row,
+    "free_capture_start": lambda args: _WORKER.start_free(),
 }
 
 

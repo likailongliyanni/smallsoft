@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("snapAPI", {
   copy: (text) => ipcRenderer.invoke("copy", text),
   // 选图片文件 → 路径数组
   pickImages: () => ipcRenderer.invoke("pickImages"),
+  // 选表格/文本文件 → 单个路径
+  pickFile: () => ipcRenderer.invoke("pickFile"),
   // 读图为 dataURL（显示缩略图）
   readThumb: (p) => ipcRenderer.invoke("readThumb", p),
   // 开始截图（弹全屏框选层）

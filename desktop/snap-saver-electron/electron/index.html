@@ -63,7 +63,7 @@
       <!-- 工具栏 -->
       <div class="toolbar">
         <button class="btn btn-blue" id="captureBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>开始截图</button>
-        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 3v4H2m4 0h12a2 2 0 0 1 2 2v9m0 0h-4m4 0v4M3 6v12a2 2 0 0 0 2 2h12"/></svg>自由截图</button>
+        <button class="btn" id="freeBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 3v4H2m4 0h12a2 2 0 0 1 2 2v9m0 0h-4m4 0v4M3 6v12a2 2 0 0 0 2 2h12"/></svg>自由截图</button>
         <button class="btn" id="importBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M21 15V8a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7"/><path d="M16 19h6M19 16v6"/></svg>导入图片</button>
         <div class="toolbar-divider"></div>
         <button class="btn" id="repairBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/><path d="M18 13l.8 2L21 16l-2.2 1-.8 2-.8-2L15 16l2.2-1z"/></svg>AI 智能修复</button>
@@ -138,8 +138,12 @@
             <button class="btn btn-icon" id="collectClose" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
           </div>
           <div class="modal-body">
-            <div class="field-label" style="margin-bottom:5px">商品列表（每行一个：名称 + 链接，用 Tab 或空格隔开）</div>
-            <textarea id="collectRows" class="doc-caption" style="min-height:120px" placeholder="例如：&#10;红色连衣裙&#9;https://item.example.com/123&#10;蓝色T恤&#9;https://item.example.com/456"></textarea>
+            <div class="doc-toolbar" style="margin-bottom:8px">
+              <div class="field-label" style="margin:0">商品列表（每行：名称 + 链接，Tab 或空格隔开）</div>
+              <span class="spacer"></span>
+              <button class="btn" id="collectImport"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M12 11v6M9 14l3 3 3-3"/></svg>导入表格文件</button>
+            </div>
+            <textarea id="collectRows" class="doc-caption" style="min-height:120px" placeholder="例如：&#10;红色连衣裙&#9;https://item.example.com/123&#10;蓝色T恤&#9;https://item.example.com/456&#10;&#10;也可以点右上角「导入表格文件」读 Excel/CSV"></textarea>
 
             <div class="doc-toolbar" style="margin-top:12px">
               <span style="font-size:13px;color:var(--muted)">主图张数</span>

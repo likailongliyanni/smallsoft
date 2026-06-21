@@ -92,7 +92,11 @@ async function docAddImages() {
   renderDocList();
 }
 $("docAddImg")?.addEventListener("click", docAddImages);
-$("importBtn")?.addEventListener("click", async () => { openDoc(); await docAddImages(); });
+// 「导入图片」= 打开 AI 修复弹窗并选图（导入图片就是为了修图，职责清晰）
+$("importBtn")?.addEventListener("click", async () => {
+  await openRepair();
+  $("repairPick")?.click();
+});
 
 function syncDocFromDOM() {
   document.querySelectorAll(".doc-row").forEach((row, i) => {
@@ -288,6 +292,19 @@ function closeCollect() { $("collectModal").style.display = "none"; }
 $("captureBtn")?.addEventListener("click", openCollect);
 $("collectClose")?.addEventListener("click", () => { if (!collecting) closeCollect(); });
 
+// 导入表格文件（Excel/CSV/txt）→ 填到商品列表框
+$("collectImport")?.addEventListener("click", async () => {
+  const file = await window.snapAPI.pickFile();
+  if (!file) return;
+  const r = await window.snapAPI.backend("import_rows_file", { path: file });
+  if (r.ok && r.data?.rows?.length) {
+    $("collectRows").value = r.data.rows.map((x) => `${x.name}\t${x.link}`).join("\n");
+    $("collectStatus").textContent = `已导入 ${r.data.rows.length} 行。`;
+  } else {
+    $("collectStatus").textContent = "导入失败：" + (r.error || "没读到有效行");
+  }
+});
+
 $("collectStart")?.addEventListener("click", async () => {
   const text = $("collectRows").value.trim();
   if (!text) { $("collectStatus").textContent = "请先粘贴商品名称+链接列表。"; return; }
@@ -320,6 +337,25 @@ $("collectStop")?.addEventListener("click", async () => {
 });
 
 $("collectNext")?.addEventListener("click", () => window.snapAPI.backend("capture_next_row"));
+
+// 自由截图：连续 Ctrl 拖框随手截，存自由截图目录
+let freeOn = false;
+$("freeBtn")?.addEventListener("click", async () => {
+  if (!freeOn) {
+    const r = await window.snapAPI.backend("free_capture_start");
+    if (!r.ok) { setBadge("● 启用失败", false); alert("自由截图启用失败：" + (r.error || "可能被安全软件拦截")); return; }
+    freeOn = true;
+    $("freeBtn").classList.add("btn-primary");
+    $("freeBtn").lastChild.textContent = " 结束自由截图";
+    setBadge("● 自由截图中", true);
+  } else {
+    await window.snapAPI.backend("capture_stop");
+    freeOn = false;
+    $("freeBtn").classList.remove("btn-primary");
+    $("freeBtn").lastChild.textContent = "自由截图";
+    setBadge("● 已就绪", true);
+  }
+});
 
 // 监听后台采集事件
 window.snapAPI.onPyEvent(async (msg) => {

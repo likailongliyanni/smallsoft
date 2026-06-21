@@ -162,6 +162,16 @@ ipcMain.handle("pickImages", async () => {
   return r.canceled ? [] : r.filePaths;
 });
 
+// 选表格文件（Excel/CSV/txt），返回单个路径
+ipcMain.handle("pickFile", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "选择名称+链接列表文件",
+    properties: ["openFile"],
+    filters: [{ name: "表格/文本", extensions: ["xlsx", "xlsm", "csv", "txt"] }],
+  });
+  return r.canceled ? "" : r.filePaths[0];
+});
+
 // 读图为 dataURL（界面显示缩略图用）
 ipcMain.handle("readThumb", (_e, filePath) => {
   try {
