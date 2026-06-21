@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    #box {
+      position: fixed; left: 0; top: 0; width: 0; height: 0; display: none;
+      border: 2px solid #16a34a; background: rgba(22,163,74,0.10);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.5);
+    }
+    #tag {
+      position: fixed; display: none; background: #16a34a; color: #fff;
+      font: 12px "Microsoft YaHei UI", sans-serif; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="box"></div>
+  <div id="tag"></div>
+  <script>
+    const box = document.getElementById("box");
+    const tag = document.getElementById("tag");
+    const sf = window.devicePixelRatio || 1;
+    window.overlayAPI.onRect((r) => {
+      box.style.display = "block";
+      box.style.left = r.x + "px";
+      box.style.top = r.y + "px";
+      box.style.width = r.w + "px";
+      box.style.height = r.h + "px";
+      tag.style.display = "block";
+      tag.textContent = Math.round(r.w * sf) + " × " + Math.round(r.h * sf);
+      tag.style.left = (r.x + r.w - 64) + "px";
+      tag.style.top = (r.y + r.h + 5) + "px";
+    });
+  </script>
+</body>
+</html>

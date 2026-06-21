@@ -81,14 +81,18 @@ $("docBtn")?.addEventListener("click", openDoc);
 $("docClose")?.addEventListener("click", closeDoc);
 $("docModal")?.addEventListener("click", (e) => { if (e.target.id === "docModal") closeDoc(); });
 
+// 整理文档：选「文件夹」，自动加载里面所有图片（文档通常是一组图，按文件夹整理）
 async function docAddImages() {
-  const paths = await window.snapAPI.pickImages();
-  for (const p of paths) {
-    const thumb = await window.snapAPI.readThumb(p);
-    docItems.push({
-      path: p, name: p.split(/[\\/]/).pop(), caption: "", hint: "", size: "full", thumb,
-    });
+  const dir = await window.snapAPI.pickFolder();
+  if (!dir) return;
+  const r = await window.snapAPI.backend("list_folder_images", { dir });
+  const images = (r.ok && r.data?.images) || [];
+  if (!images.length) { $("docStatus").textContent = "该文件夹里没有图片。"; return; }
+  for (const im of images) {
+    const thumb = await window.snapAPI.readThumb(im.path);
+    docItems.push({ path: im.path, name: im.name, caption: "", hint: "", size: "full", thumb });
   }
+  $("docStatus").textContent = `已从文件夹载入 ${images.length} 张图片。`;
   renderDocList();
 }
 $("docAddImg")?.addEventListener("click", docAddImages);
@@ -193,13 +197,12 @@ async function docExport(format) {
 $("docExportPdf")?.addEventListener("click", () => docExport("pdf"));
 $("docExportLong")?.addEventListener("click", () => docExport("long"));
 
-// ───────────────────────── AI 智能修复 ─────────────────────────
-let repairPath = "";
-let repairOutPath = "";
+// ───────────────────────── AI 智能修复（选文件夹 + 勾选 + 批量）─────────────────────────
+let repairImgs = [];      // [{path, name, thumb, sel, status}]
+let repairOutDir = "";
 
 async function openRepair() {
   $("repairModal").style.display = "flex";
-  // 拉修复模式填充下拉
   const sel = $("repairMode");
   if (sel && !sel.dataset.loaded) {
     try {
@@ -216,50 +219,79 @@ $("repairBtn")?.addEventListener("click", openRepair);
 $("repairClose")?.addEventListener("click", closeRepair);
 $("repairModal")?.addEventListener("click", (e) => { if (e.target.id === "repairModal") closeRepair(); });
 
+function renderRepairGrid() {
+  const grid = $("repairGrid");
+  const has = repairImgs.length > 0;
+  $("repairSelAll").style.display = has ? "inline-flex" : "none";
+  $("repairSelNone").style.display = has ? "inline-flex" : "none";
+  const selCount = repairImgs.filter((x) => x.sel).length;
+  $("repairPickCount").textContent = has ? `共 ${repairImgs.length} 张，选中 ${selCount}` : "";
+  $("repairRun").disabled = selCount === 0;
+  if (!has) {
+    grid.innerHTML = '<div class="doc-empty">点「选择文件夹」，列出里面所有图片，勾选要处理的，再点「开始修复」批量执行。</div>';
+    return;
+  }
+  grid.innerHTML = "";
+  repairImgs.forEach((im, i) => {
+    const card = document.createElement("div");
+    card.className = "repair-card" + (im.sel ? " sel" : "");
+    const statusTag = im.status === "done" ? '<span class="rc-status rc-done">✓ 已修</span>'
+      : im.status === "run" ? '<span class="rc-status rc-run">修复中</span>'
+      : im.status === "fail" ? '<span class="rc-status rc-fail">失败</span>' : "";
+    card.innerHTML = `
+      <div class="rc-check">${im.sel ? "✓" : ""}</div>${statusTag}
+      <img class="rc-img" src="${im.thumb || ""}" alt="" />
+      <div class="rc-name">${im.name}</div>`;
+    card.addEventListener("click", () => { im.sel = !im.sel; renderRepairGrid(); });
+    grid.appendChild(card);
+  });
+}
+
 $("repairPick")?.addEventListener("click", async () => {
-  const paths = await window.snapAPI.pickImages();
-  if (!paths.length) return;
-  repairPath = paths[0];
-  const thumb = await window.snapAPI.readThumb(repairPath);
-  $("repairBefore").innerHTML = `<img src="${thumb}" alt="原图" />`;
-  $("repairAfter").innerHTML = '<span class="doc-empty">点「开始修复」</span>';
-  $("repairRun").disabled = false;
-  $("repairOpen").disabled = true;
-  $("repairStatus").textContent = repairPath.split(/[\\/]/).pop();
+  const dir = await window.snapAPI.pickFolder();
+  if (!dir) return;
+  $("repairStatus").textContent = "正在读取文件夹…";
+  const r = await window.snapAPI.backend("list_folder_images", { dir });
+  const images = (r.ok && r.data?.images) || [];
+  if (!images.length) { $("repairStatus").textContent = "该文件夹里没有图片。"; return; }
+  repairImgs = [];
+  for (const im of images) {
+    const thumb = await window.snapAPI.readThumb(im.path);
+    repairImgs.push({ path: im.path, name: im.name, thumb, sel: true, status: "" });
+  }
+  $("repairStatus").textContent = `已载入 ${images.length} 张，默认全选。`;
+  renderRepairGrid();
 });
 
+$("repairSelAll")?.addEventListener("click", () => { repairImgs.forEach((x) => x.sel = true); renderRepairGrid(); });
+$("repairSelNone")?.addEventListener("click", () => { repairImgs.forEach((x) => x.sel = false); renderRepairGrid(); });
+
 $("repairRun")?.addEventListener("click", async () => {
-  if (!repairPath) return;
+  const targets = repairImgs.filter((x) => x.sel && x.status !== "done");
+  if (!targets.length) return;
   const mode = $("repairMode").value || "watermark";
-  const runBtn = $("repairRun");
-  runBtn.disabled = true;
-  $("repairAfter").innerHTML = '<span class="repair-spin">AI 修复中，请稍候（约 10-40 秒）…</span>';
-  $("repairStatus").textContent = "正在修复…";
-  try {
-    const r = await window.snapAPI.backend("repair_image", { path: repairPath, mode });
-    if (r.ok && r.data?.out) {
-      repairOutPath = r.data.out;
-      const thumb = await window.snapAPI.readThumb(repairOutPath);
-      $("repairAfter").innerHTML = `<img src="${thumb}" alt="修复后" />`;
-      $("repairStatus").textContent = "修复完成：" + repairOutPath.split(/[\\/]/).pop();
-      $("repairOpen").disabled = false;
-    } else {
-      $("repairAfter").innerHTML = '<span class="doc-empty">修复失败</span>';
-      $("repairStatus").textContent = "修复失败：" + (r.error || "请重试");
-    }
-  } catch (e) {
-    $("repairAfter").innerHTML = '<span class="doc-empty">修复失败</span>';
-    $("repairStatus").textContent = "修复失败：" + e.message;
-  } finally {
-    runBtn.disabled = false;
+  $("repairRun").disabled = true;
+  $("repairPick").disabled = true;
+  let done = 0, fail = 0;
+  for (let k = 0; k < targets.length; k++) {
+    const im = targets[k];
+    im.status = "run"; renderRepairGrid();
+    $("repairStatus").textContent = `修复中 ${k + 1}/${targets.length}：${im.name}`;
+    try {
+      const r = await window.snapAPI.backend("repair_image", { path: im.path, mode });
+      if (r.ok && r.data?.out) { im.status = "done"; repairOutDir = r.data.dir || repairOutDir; done++; }
+      else { im.status = "fail"; fail++; }
+    } catch { im.status = "fail"; fail++; }
+    renderRepairGrid();
   }
+  $("repairStatus").textContent = `完成：成功 ${done}${fail ? "，失败 " + fail : ""}。结果在「AI修复」目录。`;
+  $("repairOpen").disabled = !repairOutDir;
+  $("repairRun").disabled = false;
+  $("repairPick").disabled = false;
 });
 
 $("repairOpen")?.addEventListener("click", () => {
-  if (repairOutPath) {
-    const dir = repairOutPath.replace(/[\\/][^\\/]+$/, "");
-    window.snapAPI.backend("open_path", { path: dir });
-  }
+  if (repairOutDir) window.snapAPI.backend("open_path", { path: repairOutDir });
 });
 
 // ───────────────────────── 截图 ─────────────────────────
@@ -318,25 +350,22 @@ $("collectStart")?.addEventListener("click", async () => {
   const r = await window.snapAPI.backend("capture_start", { rows, main_count: mainCount, detail_count: detailCount });
   if (!r.ok) { $("collectStatus").textContent = "启动失败：" + (r.error || ""); return; }
   collecting = true;
-  $("collectStart").style.display = "none";
-  $("collectStop").style.display = "inline-flex";
-  $("collectNext").style.display = "inline-flex";
-  $("collectProgress").style.display = "block";
-  $("collectStatus").textContent = "采集中：到浏览器里 Ctrl + 拖框截图";
+  // 关闭采集弹窗，主界面显示进度视窗（边截边看）
+  closeCollect();
+  $("taskPanel").style.display = "block";
   setBadge("● 采集中", true);
 });
 
-$("collectStop")?.addEventListener("click", async () => {
-  await window.snapAPI.backend("capture_stop");
+function stopCollect() {
+  window.snapAPI.backend("capture_stop");
   collecting = false;
-  $("collectStart").style.display = "inline-flex";
-  $("collectStop").style.display = "none";
-  $("collectNext").style.display = "none";
-  $("collectStatus").textContent = "已停止采集。";
+  $("taskPanel").style.display = "none";
   setBadge("● 已就绪", true);
-});
-
+}
+$("collectStop")?.addEventListener("click", stopCollect);
+$("taskStop")?.addEventListener("click", stopCollect);
 $("collectNext")?.addEventListener("click", () => window.snapAPI.backend("capture_next_row"));
+$("taskNext")?.addEventListener("click", () => window.snapAPI.backend("capture_next_row"));
 
 // 自由截图：连续 Ctrl 拖框随手截，存自由截图目录
 let freeOn = false;
@@ -357,25 +386,24 @@ $("freeBtn")?.addEventListener("click", async () => {
   }
 });
 
-// 监听后台采集事件
+// 监听后台采集事件 → 更新主界面进度视窗 + 截图列表
 window.snapAPI.onPyEvent(async (msg) => {
   if (msg.event === "capture_progress") {
-    $("collectCur").textContent = `第 ${msg.index + 1}/${msg.total} 个：${msg.row_name || ""}（正在截「${msg.category}」）`;
-    $("collectStat").textContent = `主图 ${msg.main_done}/${msg.main_count} · 详情 ${msg.detail_done}/${msg.detail_count}`;
+    if ($("taskCur")) $("taskCur").textContent = `第 ${msg.index + 1}/${msg.total} 个：${msg.row_name || ""}（正在截「${msg.category}」）`;
+    if ($("taskStat")) $("taskStat").textContent = `主图 ${msg.main_done}/${msg.main_count} · 详情 ${msg.detail_done}/${msg.detail_count}`;
   } else if (msg.event === "capture_saved") {
     let thumb = "";
     try { thumb = await window.snapAPI.readThumb(msg.path); } catch {}
-    shots.unshift({ path: msg.path, name: `${msg.row_name}/${msg.category}/${msg.name}`, w: msg.w, h: msg.h, thumb });
+    const label = msg.category ? `${msg.row_name}/${msg.category}/${msg.name}` : msg.name;
+    shots.unshift({ path: msg.path, name: label, w: msg.w, h: msg.h, thumb });
     renderShots();
   } else if (msg.event === "capture_all_done") {
     collecting = false;
-    $("collectStart").style.display = "inline-flex";
-    $("collectStop").style.display = "none";
-    $("collectNext").style.display = "none";
-    $("collectStatus").textContent = "全部截完！可以去「整理成文档」或「AI 修复」。";
+    $("taskPanel").style.display = "none";
     setBadge("● 已就绪", true);
+    alert("列表已全部截完！可以去「整理成文档」或「AI 智能修复」。");
   } else if (msg.event === "capture_error") {
-    $("collectStatus").textContent = "截图出错：" + (msg.error || "");
+    setBadge("● 截图出错", false);
   }
 });
 

@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("snapAPI", {
   pickImages: () => ipcRenderer.invoke("pickImages"),
   // 选表格/文本文件 → 单个路径
   pickFile: () => ipcRenderer.invoke("pickFile"),
+  // 选文件夹 → 路径
+  pickFolder: () => ipcRenderer.invoke("pickFolder"),
   // 读图为 dataURL（显示缩略图）
   readThumb: (p) => ipcRenderer.invoke("readThumb", p),
   // 开始截图（弹全屏框选层）

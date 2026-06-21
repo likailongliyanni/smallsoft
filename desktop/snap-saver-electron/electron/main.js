@@ -6,10 +6,52 @@ const { spawn } = require("child_process");
 
 let mainWin = null;
 let captureWin = null;
+let overlayWin = null;       // 拖框时的选框可视化覆盖窗（全屏透明、鼠标穿透）
+let dragStartPt = null;      // 物理坐标的起点
 
 let pyProc = null;
 let pyBuffer = "";
 let reqId = 0;
+
+// 拖框选区可视化：Python 钩子推 capture_drag_start/move/end，这里画绿框
+function ensureOverlay() {
+  if (overlayWin && !overlayWin.isDestroyed()) return overlayWin;
+  const primary = screen.getPrimaryDisplay();
+  const { width, height } = primary.size;
+  overlayWin = new BrowserWindow({
+    x: 0, y: 0, width, height,
+    frame: false, transparent: true, fullscreen: false,
+    alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: false,
+    focusable: false, hasShadow: false, enableLargerThanScreen: true,
+    webPreferences: { preload: path.join(__dirname, "overlay-preload.js"), contextIsolation: true },
+  });
+  overlayWin.setIgnoreMouseEvents(true);     // 鼠标穿透，不挡网页操作
+  overlayWin.setAlwaysOnTop(true, "screen-saver");
+  overlayWin.loadFile(path.join(__dirname, "overlay.html"));
+  return overlayWin;
+}
+
+function handleDragOverlay(msg) {
+  const sf = screen.getPrimaryDisplay().scaleFactor || 1;
+  if (msg.event === "capture_drag_start") {
+    dragStartPt = { x: msg.x, y: msg.y };
+    const w = ensureOverlay();
+    w.showInactive();
+  } else if (msg.event === "capture_drag_move") {
+    if (!dragStartPt || !overlayWin || overlayWin.isDestroyed()) return;
+    // 物理坐标 → CSS 逻辑坐标（除以缩放）
+    const r = {
+      x: Math.min(dragStartPt.x, msg.x) / sf,
+      y: Math.min(dragStartPt.y, msg.y) / sf,
+      w: Math.abs(msg.x - dragStartPt.x) / sf,
+      h: Math.abs(msg.y - dragStartPt.y) / sf,
+    };
+    overlayWin.webContents.send("overlay-rect", r);
+  } else if (msg.event === "capture_drag_end") {
+    dragStartPt = null;
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
+  }
+}
 const pending = new Map(); // id -> {resolve, reject}
 
 // 后端脚本在 electron/ 的上一级目录
@@ -34,6 +76,7 @@ function startBackend() {
       try { msg = JSON.parse(line); } catch { continue; }
       // 后台事件推送（截图进度等）→ 转发给界面
       if (msg.event) {
+        handleDragOverlay(msg);  // 拖框时显示选框
         if (mainWin) mainWin.webContents.send("py-event", msg);
         continue;
       }
@@ -168,6 +211,15 @@ ipcMain.handle("pickFile", async () => {
     title: "选择名称+链接列表文件",
     properties: ["openFile"],
     filters: [{ name: "表格/文本", extensions: ["xlsx", "xlsm", "csv", "txt"] }],
+  });
+  return r.canceled ? "" : r.filePaths[0];
+});
+
+// 选文件夹，返回路径
+ipcMain.handle("pickFolder", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "选择图片文件夹",
+    properties: ["openDirectory"],
   });
   return r.canceled ? "" : r.filePaths[0];
 });

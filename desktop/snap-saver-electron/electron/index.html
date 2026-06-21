@@ -85,7 +85,7 @@
               <input type="text" id="docIntro" placeholder="整体说明（可选，显示在文档开头）" />
             </div>
             <div class="doc-toolbar">
-              <button class="btn" id="docAddImg"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M21 15V8a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7"/><path d="M16 19h6M19 16v6"/></svg>添加图片</button>
+              <button class="btn" id="docAddImg"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择文件夹</button>
               <span class="doc-hint" id="docCount">共 0 张</span>
               <span class="spacer"></span>
               <span class="doc-hint">每张可单独选「文档宽度」</span>
@@ -111,21 +111,23 @@
           </div>
           <div class="modal-body">
             <div class="doc-toolbar">
-              <button class="btn" id="repairPick"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M21 15V8a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7"/><path d="M16 19h6M19 16v6"/></svg>选择图片</button>
+              <button class="btn" id="repairPick"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>选择文件夹</button>
+              <button class="btn" id="repairSelAll" style="display:none">全选</button>
+              <button class="btn" id="repairSelNone" style="display:none">全不选</button>
               <span style="font-size:13px;color:var(--muted)">修复模式</span>
               <select id="repairMode" style="min-width:130px"></select>
               <span class="spacer"></span>
-              <button class="btn btn-primary" id="repairRun" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/></svg>开始修复</button>
+              <span class="doc-hint" id="repairPickCount"></span>
             </div>
-            <div class="repair-compare" id="repairCompare">
-              <div class="repair-pane"><div class="repair-tag">原图</div><div class="repair-img-wrap" id="repairBefore"><span class="doc-empty">先选择一张图片</span></div></div>
-              <div class="repair-pane"><div class="repair-tag">修复后</div><div class="repair-img-wrap" id="repairAfter"><span class="doc-empty">点「开始修复」</span></div></div>
+            <div class="repair-grid" id="repairGrid">
+              <div class="doc-empty">点「选择文件夹」，列出里面所有图片，勾选要处理的，再点「开始修复」批量执行。</div>
             </div>
           </div>
           <div class="modal-foot">
             <span class="doc-status" id="repairStatus"></span>
             <span class="spacer"></span>
             <button class="btn" id="repairOpen" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开结果文件夹</button>
+            <button class="btn btn-primary" id="repairRun" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/></svg>开始修复选中</button>
           </div>
         </div>
       </div>
@@ -168,6 +170,21 @@
             <button class="btn btn-primary" id="collectStart"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>开始采集</button>
           </div>
         </div>
+      </div>
+
+      <!-- 采集任务进度视窗（采集中显示在主界面，方便边截边看）-->
+      <div class="card" id="taskPanel" style="display:none; margin-bottom:14px; border-color:var(--green); background:var(--green-soft)">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <div>
+            <div style="font-size:14px; font-weight:600" id="taskCur">采集中…</div>
+            <div style="font-size:13px; color:var(--green-dark); margin-top:3px" id="taskStat">主图 0/1 · 详情 0/3</div>
+          </div>
+          <div style="display:flex; gap:8px">
+            <button class="btn" id="taskNext"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 12h14M13 6l6 6-6 6"/></svg>下一个</button>
+            <button class="btn" id="taskStop" style="color:#c0392b">停止采集</button>
+          </div>
+        </div>
+        <div style="font-size:12px; color:var(--muted); margin-top:8px">到浏览器网页上 <b>按住 Ctrl + 鼠标拖框</b> 截图，松开自动保存归类。</div>
       </div>
 
       <!-- 截图进度列表 -->

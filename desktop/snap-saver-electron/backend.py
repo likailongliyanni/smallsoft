@@ -22,6 +22,13 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", newline="")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import snap_saver as S
 
+# 关键：让本进程 DPI 感知，使全局鼠标钩子坐标与 ImageGrab 用同一套物理坐标。
+# 不设的话高分屏（125%/150% 缩放）下截图坐标错位 → 截到空白/越界 → 看似"没保存"。
+try:
+    S.enable_dpi_awareness()
+except Exception:
+    pass
+
 # 持有一个登记后的 token（同步额度等需要）
 _STATE = {"token": "", "server_url": S.DEFAULT_SERVER_URL}
 
@@ -346,8 +353,10 @@ class CaptureWorker:
 
     def _advance(self):
         if self.index + 1 >= len(self.rows):
+            # 全部商品截完：自动停掉钩子，避免任务完成后还能继续截
             _push_event("capture_all_done")
             self._push_progress()
+            self.stop()
             return
         self.index += 1
         self.category = "主图"
@@ -391,6 +400,23 @@ def cmd_capture_set_category(args):
 def cmd_capture_next_row(args):
     _WORKER.next_row()
     return {"ok": True}
+
+
+def cmd_list_folder_images(args):
+    """扫描一个文件夹里的所有图片（递归），给整理文档/AI修复用。args: {dir}"""
+    d = Path(args.get("dir") or "")
+    if not d.exists() or not d.is_dir():
+        raise RuntimeError("文件夹不存在。")
+    paths = S.scan_image_folder(d)
+    images = []
+    for p in paths:
+        try:
+            with S.Image.open(p) as im:
+                w, h = im.size
+        except Exception:
+            w, h = 0, 0
+        images.append({"path": str(p), "name": p.name, "w": w, "h": h})
+    return {"images": images, "dir": str(d)}
 
 
 def cmd_import_rows_file(args):
@@ -499,6 +525,7 @@ HANDLERS = {
     "save_capture": cmd_save_capture,
     "parse_rows": cmd_parse_rows,
     "import_rows_file": cmd_import_rows_file,
+    "list_folder_images": cmd_list_folder_images,
     "capture_start": cmd_capture_start,
     "capture_stop": cmd_capture_stop,
     "capture_set_category": cmd_capture_set_category,
