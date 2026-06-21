@@ -280,19 +280,67 @@ function renderShots() {
   });
 }
 
-$("captureBtn")?.addEventListener("click", async () => {
-  const r = await window.snapAPI.startCapture();
-  if (!r.ok) setBadge("● 截图失败", false);
+// ─────────────────── 电商批量采集 ───────────────────
+let collecting = false;
+
+function openCollect() { $("collectModal").style.display = "flex"; }
+function closeCollect() { $("collectModal").style.display = "none"; }
+$("captureBtn")?.addEventListener("click", openCollect);
+$("collectClose")?.addEventListener("click", () => { if (!collecting) closeCollect(); });
+
+$("collectStart")?.addEventListener("click", async () => {
+  const text = $("collectRows").value.trim();
+  if (!text) { $("collectStatus").textContent = "请先粘贴商品名称+链接列表。"; return; }
+  // 解析列表
+  const pr = await window.snapAPI.backend("parse_rows", { text });
+  const rows = (pr.ok && pr.data?.rows) || [];
+  if (!rows.length) { $("collectStatus").textContent = "没解析到有效的行。"; return; }
+  const mainCount = parseInt($("mainCount").value) || 0;
+  const detailCount = parseInt($("detailCount").value) || 0;
+
+  const r = await window.snapAPI.backend("capture_start", { rows, main_count: mainCount, detail_count: detailCount });
+  if (!r.ok) { $("collectStatus").textContent = "启动失败：" + (r.error || ""); return; }
+  collecting = true;
+  $("collectStart").style.display = "none";
+  $("collectStop").style.display = "inline-flex";
+  $("collectNext").style.display = "inline-flex";
+  $("collectProgress").style.display = "block";
+  $("collectStatus").textContent = "采集中：到浏览器里 Ctrl + 拖框截图";
+  setBadge("● 采集中", true);
 });
 
-// 截图保存完成 → 加入进度列表
-window.snapAPI.onCaptureSaved(async (res) => {
-  if (!res || res.error) { setBadge("● 截图失败", false); return; }
-  let thumb = "";
-  try { thumb = await window.snapAPI.readThumb(res.path); } catch {}
-  shots.unshift({ path: res.path, name: res.name, w: res.w, h: res.h, thumb });
-  renderShots();
+$("collectStop")?.addEventListener("click", async () => {
+  await window.snapAPI.backend("capture_stop");
+  collecting = false;
+  $("collectStart").style.display = "inline-flex";
+  $("collectStop").style.display = "none";
+  $("collectNext").style.display = "none";
+  $("collectStatus").textContent = "已停止采集。";
   setBadge("● 已就绪", true);
+});
+
+$("collectNext")?.addEventListener("click", () => window.snapAPI.backend("capture_next_row"));
+
+// 监听后台采集事件
+window.snapAPI.onPyEvent(async (msg) => {
+  if (msg.event === "capture_progress") {
+    $("collectCur").textContent = `第 ${msg.index + 1}/${msg.total} 个：${msg.row_name || ""}（正在截「${msg.category}」）`;
+    $("collectStat").textContent = `主图 ${msg.main_done}/${msg.main_count} · 详情 ${msg.detail_done}/${msg.detail_count}`;
+  } else if (msg.event === "capture_saved") {
+    let thumb = "";
+    try { thumb = await window.snapAPI.readThumb(msg.path); } catch {}
+    shots.unshift({ path: msg.path, name: `${msg.row_name}/${msg.category}/${msg.name}`, w: msg.w, h: msg.h, thumb });
+    renderShots();
+  } else if (msg.event === "capture_all_done") {
+    collecting = false;
+    $("collectStart").style.display = "inline-flex";
+    $("collectStop").style.display = "none";
+    $("collectNext").style.display = "none";
+    $("collectStatus").textContent = "全部截完！可以去「整理成文档」或「AI 修复」。";
+    setBadge("● 已就绪", true);
+  } else if (msg.event === "capture_error") {
+    $("collectStatus").textContent = "截图出错：" + (msg.error || "");
+  }
 });
 
 window.addEventListener("DOMContentLoaded", () => { init(); renderShots(); });

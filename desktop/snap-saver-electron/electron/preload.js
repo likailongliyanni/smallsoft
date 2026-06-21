@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("snapAPI", {
   startCapture: () => ipcRenderer.invoke("startCapture"),
   // 截图保存完成回调
   onCaptureSaved: (cb) => ipcRenderer.on("capture-saved", (_e, res) => cb(res)),
+  // 后台事件推送（批量采集进度/截图等）
+  onPyEvent: (cb) => ipcRenderer.on("py-event", (_e, msg) => cb(msg)),
 });
 
 // 截图覆盖层（capture.html）专用桥

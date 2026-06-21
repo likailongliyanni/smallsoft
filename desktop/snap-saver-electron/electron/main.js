@@ -32,6 +32,11 @@ function startBackend() {
       if (!line) continue;
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
+      // 后台事件推送（截图进度等）→ 转发给界面
+      if (msg.event) {
+        if (mainWin) mainWin.webContents.send("py-event", msg);
+        continue;
+      }
       const p = pending.get(msg.id);
       if (p) {
         pending.delete(msg.id);
