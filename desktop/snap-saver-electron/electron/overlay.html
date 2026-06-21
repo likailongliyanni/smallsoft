@@ -13,25 +13,92 @@
       position: fixed; display: none; background: #16a34a; color: #fff;
       font: 12px "Microsoft YaHei UI", sans-serif; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
     }
+    #message {
+      position: fixed; left: 50%; top: 14%; transform: translateX(-50%);
+      display: none; min-width: 360px; max-width: 680px; box-sizing: border-box;
+      padding: 16px 22px; border-radius: 14px; text-align: center;
+      color: #fff; background: rgba(17, 24, 39, .92); box-shadow: 0 12px 36px rgba(0,0,0,.28);
+      font-family: "Microsoft YaHei UI", sans-serif;
+    }
+    #message.ready { background: rgba(7, 154, 72, .94); }
+    #message strong { display: block; font-size: 18px; margin-bottom: 5px; }
+    #message span { display: block; font-size: 13px; opacity: .9; }
+    #windowFrame {
+      position: fixed; display: none; box-sizing: border-box; pointer-events: none;
+      border: 3px solid #22c55e; background: rgba(34,197,94,.06);
+      box-shadow: 0 0 0 1px rgba(255,255,255,.65), 0 8px 28px rgba(0,0,0,.18);
+    }
+    #windowLabel {
+      position: absolute; left: -3px; top: -34px; max-width: 520px;
+      padding: 6px 10px; border-radius: 7px 7px 7px 0;
+      color: #fff; background: #16a34a; font: 12px "Microsoft YaHei UI", sans-serif;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
   <div id="box"></div>
   <div id="tag"></div>
+  <div id="message"><strong></strong><span></span></div>
+  <div id="windowFrame"><div id="windowLabel"></div></div>
   <script>
     const box = document.getElementById("box");
     const tag = document.getElementById("tag");
-    const sf = window.devicePixelRatio || 1;
-    window.overlayAPI.onRect((r) => {
+    const message = document.getElementById("message");
+    const windowFrame = document.getElementById("windowFrame");
+    const windowLabel = document.getElementById("windowLabel");
+    let pendingRect = null;
+    let rectFrame = 0;
+    function drawRect(r) {
+      message.style.display = "none";
+      windowFrame.style.display = "none";
       box.style.display = "block";
       box.style.left = r.x + "px";
       box.style.top = r.y + "px";
       box.style.width = r.w + "px";
       box.style.height = r.h + "px";
       tag.style.display = "block";
-      tag.textContent = Math.round(r.w * sf) + " × " + Math.round(r.h * sf);
+      tag.textContent = Math.round(r.pixelW || r.w) + " × " + Math.round(r.pixelH || r.h);
       tag.style.left = (r.x + r.w - 64) + "px";
       tag.style.top = (r.y + r.h + 5) + "px";
+    }
+    window.overlayAPI.onRect((r) => {
+      pendingRect = r;
+      if (rectFrame) return;
+      rectFrame = requestAnimationFrame(() => {
+        rectFrame = 0;
+        if (pendingRect) drawRect(pendingRect);
+      });
+    });
+    window.overlayAPI.onMessage((data) => {
+      box.style.display = "none";
+      tag.style.display = "none";
+      message.className = data.ready ? "ready" : "";
+      message.querySelector("strong").textContent = data.text || "";
+      message.querySelector("span").textContent = data.subtext || "";
+      message.style.display = "block";
+    });
+    window.overlayAPI.onWindow((r) => {
+      message.style.display = "none";
+      box.style.display = "none";
+      tag.style.display = "none";
+      windowFrame.style.display = "block";
+      windowFrame.style.left = r.x + "px";
+      windowFrame.style.top = r.y + "px";
+      windowFrame.style.width = r.w + "px";
+      windowFrame.style.height = r.h + "px";
+      windowLabel.textContent = `${r.title || "当前区域"} · 单击截取此区域，拖动自选范围`;
+      windowLabel.style.top = r.y < 38 ? "4px" : "-34px";
+    });
+    window.overlayAPI.onWindowHide(() => { windowFrame.style.display = "none"; });
+    window.overlayAPI.onReset(() => {
+      pendingRect = null;
+      if (rectFrame) cancelAnimationFrame(rectFrame);
+      rectFrame = 0;
+      box.style.display = "none";
+      tag.style.display = "none";
+      message.style.display = "none";
+      windowFrame.style.display = "none";
     });
   </script>
 </body>

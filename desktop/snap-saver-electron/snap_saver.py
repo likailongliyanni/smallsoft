@@ -888,6 +888,9 @@ class CtrlDragHook:
         self.last_error = ""
         self.enabled = True
         self.capturing = False
+        self.hovering = False
+        self.last_move_queued = 0.0
+        self.last_hover_queued = 0.0
         self.events: queue.Queue = queue.Queue()
 
         self.HOOKPROC = ctypes.WINFUNCTYPE(
@@ -987,12 +990,26 @@ class CtrlDragHook:
                 x, y = int(info.pt.x), int(info.pt.y)
                 if msg == WM_LBUTTONDOWN:
                     if self._ctrl_down():
+                        self.hovering = False
                         self.capturing = True
                         self.events.put(("start", x, y))
                         return 1  # 吞掉，避免网页收到这次点击
                 elif msg == WM_MOUSEMOVE:
                     if self.capturing:
-                        self.events.put(("move", x, y))
+                        now = time.perf_counter()
+                        # 钩子层先限到 120Hz，避免高回报率鼠标把事件队列塞满。
+                        if now - self.last_move_queued >= 1 / 120:
+                            self.last_move_queued = now
+                            self.events.put(("move", x, y))
+                    elif self._ctrl_down():
+                        self.hovering = True
+                        now = time.perf_counter()
+                        if now - self.last_hover_queued >= 1 / 30:
+                            self.last_hover_queued = now
+                            self.events.put(("hover", x, y))
+                    elif self.hovering:
+                        self.hovering = False
+                        self.events.put(("hover_end", x, y))
                 elif msg == WM_LBUTTONUP:
                     if self.capturing:
                         self.capturing = False
@@ -1060,14 +1077,72 @@ class SelectionBoxWindow(tk.Toplevel):
 
 # ---------------- 多图整理成文档（长图 / PDF，可配说明） ----------------
 
-def _doc_font(size: int):
-    for path in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc",
-                 r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc"):
+def _doc_font(size: int, family="yahei", bold=False):
+    fonts = {
+        "yahei": ([r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\msyh.ttc"] if bold
+                  else [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc"]),
+        "simsun": [r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\simhei.ttf"],
+        "simhei": [r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\msyhbd.ttc"],
+        "kaiti": [r"C:\Windows\Fonts\simkai.ttf", r"C:\Windows\Fonts\msyh.ttc"],
+    }
+    paths = fonts.get(str(family or "yahei"), fonts["yahei"])
+    for path in paths + [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf"]:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, max(10, int(size)))
         except Exception:
             continue
     return ImageFont.load_default()
+
+
+def _doc_style(style=None):
+    """清洗 Electron 传入的排版参数，旧调用不传 style 时保持原效果。"""
+    raw = style if isinstance(style, dict) else {}
+    def number(name, default, low, high):
+        try:
+            return max(low, min(high, int(raw.get(name, default))))
+        except (TypeError, ValueError):
+            return default
+    try:
+        line_spacing = float(raw.get("body_line_spacing", 1.5))
+        if line_spacing > 3:
+            line_spacing /= 100.0
+        line_spacing = max(1.2, min(2.2, line_spacing))
+    except (TypeError, ValueError):
+        line_spacing = 1.5
+    return {
+        "font_family": raw.get("font_family") if raw.get("font_family") in
+                       {"yahei", "simsun", "simhei", "kaiti"} else "yahei",
+        "title_size": number("title_size", 46, 32, 80),
+        "body_size": number("body_size", 28, 18, 38),
+        "title_align": raw.get("title_align") if raw.get("title_align") in {"left", "center"} else "left",
+        "body_align": raw.get("body_align") if raw.get("body_align") in {"left", "center"} else "left",
+        "margin": raw.get("margin") if raw.get("margin") in {"narrow", "normal", "wide"} else "normal",
+        "title_space": raw.get("title_space") if raw.get("title_space") in {"compact", "normal", "large"} else "normal",
+        "template": raw.get("template") if raw.get("template") in {"clean", "classic", "warm"} else "clean",
+        "orientation": raw.get("orientation") if raw.get("orientation") in {"portrait", "landscape"} else "portrait",
+        "body_weight": raw.get("body_weight") if raw.get("body_weight") in {"regular", "bold"} else "regular",
+        "body_line_spacing": line_spacing,
+        "paragraph_indent": raw.get("paragraph_indent") not in {False, "none", "0", 0},
+        "text_color": raw.get("text_color") if raw.get("text_color") in {"dark", "gray", "green"} else "dark",
+        "caption_style": raw.get("caption_style") if raw.get("caption_style") in {"plain", "highlight", "quote"} else "plain",
+        "show_number": raw.get("show_number") not in {False, "hide", "0", 0},
+    }
+
+
+def _text_x(draw, line, font, left, width, align):
+    if align != "center":
+        return left
+    return left + max(0, (width - draw.textlength(line, font=font)) / 2)
+
+
+def _caption_background(draw, box, style, scale):
+    if style["caption_style"] == "highlight":
+        draw.rounded_rectangle(box, radius=max(6, round(8 * scale)), fill="#f0f8f3")
+    elif style["caption_style"] == "quote":
+        x1, y1, _x2, y2 = box
+        draw.rounded_rectangle(
+            (x1, y1, x1 + max(5, round(6 * scale)), y2),
+            radius=max(2, round(3 * scale)), fill="#079a48")
 
 
 def _wrap_text(draw, text, font, max_width, indent=False):
@@ -1099,7 +1174,7 @@ def _doc_target_width(items, cap_min=1100, cap_max=2400):
     return max(cap_min, min(cap_max, max(it[0].width for it in items)))
 
 
-def render_doc_card(image, caption, index, target_inner, scale, layout="auto", size="big"):
+def render_doc_card(image, caption, index, target_inner, scale, layout="auto", size="big", style=None):
     """单张截图卡片，自适应版式 + 自动缩放：
       - 竖图（高>宽 1.15 倍）且文字较多 → 图左文右（图自动放大填满文字高度，无留白）
       - 其它（横图/方图/文字很少）→ 图上文下（图按 size 档位缩放，居中）
@@ -1107,12 +1182,19 @@ def render_doc_card(image, caption, index, target_inner, scale, layout="auto", s
       big=100% / medium=72% / small=48%。让用户能把大截图排成中/小图。
     放大有上限（最多 1.8 倍）防止把低清小图拉糊。
     layout 可强制 'top' / 'side' / 'auto'。所有排版尺寸随 scale 等比。"""
-    pad = round(40 * scale)
+    style = _doc_style(style)
+    pad_base = {"narrow": 24, "normal": 40, "wide": 68}[style["margin"]]
+    pad = round(pad_base * scale)
     gap = round(36 * scale)
     img = image.convert("RGB")
-    cap_font = _doc_font(max(22, round(28 * scale)))
-    line_h = max(30, round(40 * scale))
+    cap_font = _doc_font(round(style["body_size"] * scale), style["font_family"],
+                         bold=style["body_weight"] == "bold")
+    line_h = max(24, round(style["body_size"] * style["body_line_spacing"] * scale))
     text = str(caption or "").strip()
+    if text and style["show_number"]:
+        text = f"{index}. {text}"
+    indent = style["paragraph_indent"] and style["body_align"] == "left"
+    text_fill = {"dark": "#222222", "gray": "#55605a", "green": "#075c32"}[style["text_color"]]
     measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
     card_w = target_inner + pad * 2
     MAX_UPSCALE = 1.8  # 放大上限，超过会糊
@@ -1141,7 +1223,7 @@ def render_doc_card(image, caption, index, target_inner, scale, layout="auto", s
         if is_portrait:
             # 竖图：先估文字高，让图高≈文字高，消除留白
             est_text_w = card_w - (pad + round(target_inner * 0.50) + gap) - pad
-            est_lines = _wrap_text(measure, text, cap_font, est_text_w, indent=True)
+            est_lines = _wrap_text(measure, text, cap_font, est_text_w, indent=indent)
             target_img_h = (len(est_lines) * line_h) or img.height
             scale_by_h = target_img_h / img.height
             scale_by_w = round(target_inner * 0.55) / img.width
@@ -1156,15 +1238,19 @@ def render_doc_card(image, caption, index, target_inner, scale, layout="auto", s
 
         text_x = pad + img_w + gap
         text_w = card_w - text_x - pad
-        cap_lines = _wrap_text(measure, text, cap_font, text_w, indent=True)
+        cap_lines = _wrap_text(measure, text, cap_font, text_w, indent=indent)
         text_h = len(cap_lines) * line_h
         content_h = max(img_h, text_h)
         card = Image.new("RGB", (card_w, pad + content_h + pad), "white")
         card.paste(img, (pad, pad + (content_h - img_h) // 2))
         draw = ImageDraw.Draw(card)
+        _caption_background(draw, (text_x - round(10 * scale), pad - round(8 * scale),
+                                   card_w - pad + round(10 * scale),
+                                   pad + text_h + round(8 * scale)), style, scale)
         y = pad
         for ln in cap_lines:
-            draw.text((text_x, y), ln, fill="#222222", font=cap_font)
+            x_line = _text_x(draw, ln, cap_font, text_x, text_w, style["body_align"])
+            draw.text((x_line, y), ln, fill=text_fill, font=cap_font)
             y += line_h
         return card
 
@@ -1178,39 +1264,54 @@ def render_doc_card(image, caption, index, target_inner, scale, layout="auto", s
     if (new_w, new_h) != img.size:
         img = img.resize((new_w, new_h), Image.LANCZOS)
     x = (card_w - img.width) // 2
-    cap_lines = _wrap_text(measure, text, cap_font, target_inner, indent=True) if text else []
+    cap_lines = _wrap_text(measure, text, cap_font, target_inner, indent=indent) if text else []
     cap_block = (round(16 * scale) + len(cap_lines) * line_h) if cap_lines else 0
     card = Image.new("RGB", (card_w, pad + img.height + cap_block + pad), "white")
     card.paste(img, (x, pad))
     if cap_lines:
         draw = ImageDraw.Draw(card)
         y = pad + img.height + round(16 * scale)
+        _caption_background(draw, (pad - round(10 * scale), y - round(8 * scale),
+                                   card_w - pad + round(10 * scale),
+                                   y + len(cap_lines) * line_h + round(8 * scale)), style, scale)
         for ln in cap_lines:
-            draw.text((pad, y), ln, fill="#222222", font=cap_font)
+            x_line = _text_x(draw, ln, cap_font, pad, target_inner, style["body_align"])
+            draw.text((x_line, y), ln, fill=text_fill, font=cap_font)
             y += line_h
     return card
 
 
-def render_doc_title(title, intro, target_inner, scale):
-    pad = round(40 * scale)
+def render_doc_title(title, intro, target_inner, scale, style=None):
+    style = _doc_style(style)
+    pad_base = {"narrow": 24, "normal": 40, "wide": 68}[style["margin"]]
+    pad = round(pad_base * scale)
     card_w = target_inner + pad * 2
-    t_font = _doc_font(max(34, round(46 * scale)))
-    i_font = _doc_font(max(20, round(24 * scale)))
-    t_lh = max(46, round(60 * scale))
-    i_lh = max(30, round(36 * scale))
+    t_font = _doc_font(round(style["title_size"] * scale), style["font_family"], bold=True)
+    intro_size = max(18, round(style["body_size"] * .88))
+    i_font = _doc_font(round(intro_size * scale), style["font_family"])
+    t_lh = max(40, round(style["title_size"] * 1.32 * scale))
+    i_lh = max(26, round(intro_size * 1.5 * scale))
     measure = ImageDraw.Draw(Image.new("RGB", (4, 4)))
     t_lines = _wrap_text(measure, title or "使用说明", t_font, target_inner)
     i_lines = _wrap_text(measure, intro, i_font, target_inner) if str(intro or "").strip() else []
     height = pad + len(t_lines) * t_lh + (round(24 * scale) + len(i_lines) * i_lh if i_lines else 0) + pad
-    page = Image.new("RGB", (card_w, max(height, round(180 * scale))), "white")
+    min_height = {"compact": 150, "normal": 230, "large": 380}[style["title_space"]]
+    backgrounds = {"clean": "#ffffff", "classic": "#eff8f2", "warm": "#fff8ee"}
+    title_colors = {"clean": "#0b1f16", "classic": "#075c32", "warm": "#70421f"}
+    page = Image.new("RGB", (card_w, max(height, round(min_height * scale))), backgrounds[style["template"]])
     draw = ImageDraw.Draw(page)
+    if style["template"] != "clean":
+        accent = "#079a48" if style["template"] == "classic" else "#d78b42"
+        draw.rectangle((0, 0, max(6, round(8 * scale)), page.height), fill=accent)
     y = pad
     for ln in t_lines:
-        draw.text((pad, y), ln, fill="#0b1f16", font=t_font)
+        x_line = _text_x(draw, ln, t_font, pad, target_inner, style["title_align"])
+        draw.text((x_line, y), ln, fill=title_colors[style["template"]], font=t_font)
         y += t_lh
     y += round(24 * scale)
     for ln in i_lines:
-        draw.text((pad, y), ln, fill="#444444", font=i_font)
+        x_line = _text_x(draw, ln, i_font, pad, target_inner, style["title_align"])
+        draw.text((x_line, y), ln, fill="#444444", font=i_font)
         y += i_lh
     return page
 
@@ -1256,28 +1357,123 @@ def _tile_watermark(page, scale, text=DOC_WATERMARK):
     return out.convert("RGB")
 
 
-def build_doc_pages(title, intro, items, watermark=True, size="big"):
-    """items: [(PIL.Image, caption)]，返回 [标题页, 卡片1, 卡片2, ...]。
-    watermark=True 时每页都铺满斜 45° 试用水印（付费用户传 False 去掉）。
-    size: 图片大小档位 big/medium/small，控制图在文档里占多宽。"""
-    target = _doc_target_width(items)
-    scale = target / 1000.0
-    pages = [render_doc_title(title, intro, target, scale)]
+DOC_DPI = 200
+A4_PORTRAIT = (1654, 2339)  # 210 × 297 mm @ 200 DPI
+
+
+def _resize_doc_block(block, ratio):
+    if ratio >= 0.999:
+        return block
+    return block.resize((max(1, round(block.width * ratio)),
+                         max(1, round(block.height * ratio))), Image.LANCZOS)
+
+
+def _compose_a4_page(blocks, page_size, outer, content_h, gap, page_no, style, scale):
+    page_w, page_h = page_size
+    backgrounds = {"clean": "#ffffff", "classic": "#f7fbf8", "warm": "#fffcf7"}
+    page = Image.new("RGB", page_size, backgrounds[style["template"]])
+    if len(blocks) > 1:
+        gap = min(gap, max(8, (content_h - sum(b.height for b in blocks)) // (len(blocks) - 1)))
+    y = outer
+    for block in blocks:
+        page.paste(block, ((page_w - block.width) // 2, y))
+        y += block.height + gap
+    draw = ImageDraw.Draw(page)
+    footer_font = _doc_font(max(14, round(16 * scale)), style["font_family"])
+    footer = f"—  {page_no}  —"
+    footer_w = draw.textlength(footer, font=footer_font)
+    draw.text(((page_w - footer_w) / 2, outer + content_h + round(18 * scale)),
+              footer, fill="#87918c", font=footer_font)
+    return page
+
+
+def build_doc_pages(title, intro, items, watermark=True, size="big", style=None):
+    """把标题和图片块排入固定 A4 页面；横竖版均保持标准打印比例。
+
+    当某个内容块只会超出当前页不到 10% 时，自动压缩该页间距和内容，
+    将少量尾巴合并回上一页，避免打印出只有一点内容的尾页。
+    items 兼容 (img, caption, size, layout, align)。
+    """
+    style = _doc_style(style)
+    portrait = A4_PORTRAIT
+    page_size = portrait if style["orientation"] == "portrait" else (portrait[1], portrait[0])
+    page_w, page_h = page_size
+    scale = DOC_DPI / 150.0
+    outer = {"narrow": 82, "normal": 112, "wide": 152}[style["margin"]]
+    footer_h = round(58 * scale)
+    content_w = page_w - outer * 2
+    content_h = page_h - outer * 2 - footer_h
+    gap = max(12, round(18 * scale))
+    card_pad = round({"narrow": 24, "normal": 40, "wide": 68}[style["margin"]] * scale)
+    target_inner = max(200, content_w - card_pad * 2)
+
+    blocks = [render_doc_title(title, intro, target_inner, scale, style=style)]
     for i, it in enumerate(items, 1):
-        # item 可以是 (img, cap) 或 (img, cap, per_item_size)。
-        # 带第三个就用每张图自己的尺寸，否则用全局 size 兜底。
         img, cap = it[0], it[1]
         item_size = it[2] if len(it) > 2 and it[2] else size
-        pages.append(render_doc_card(img, cap, i, target, scale, size=item_size))
+        item_layout = it[3] if len(it) > 3 and it[3] in {"auto", "top", "side"} else "auto"
+        item_style = dict(style)
+        if len(it) > 4 and it[4] in {"left", "center"}:
+            item_style["body_align"] = it[4]
+        blocks.append(render_doc_card(
+            img, cap, i, target_inner, scale, layout=item_layout,
+            size=item_size, style=item_style))
+
+    # 所有块先约束到单页内容区内，避免超高截图生成非 A4 页面。
+    fitted = []
+    for block in blocks:
+        ratio = min(1.0, content_w / block.width, content_h / block.height)
+        fitted.append(_resize_doc_block(block, ratio))
+
+    groups = []
+    current = []
+    used = 0
+    for block in fitted:
+        required = block.height + (gap if current else 0)
+        if used + required <= content_h:
+            current.append(block)
+            used += required
+            continue
+
+        overflow = used + required - content_h
+        # 只多出不足一页 10%：整页轻微紧凑，避免少量内容被甩到新页。
+        if current and overflow <= content_h * 0.10:
+            combined = current + [block]
+            compact_gap = max(8, gap // 2)
+            available = content_h - compact_gap * (len(combined) - 1)
+            ratio = min(1.0, available / sum(b.height for b in combined))
+            groups.append([_resize_doc_block(b, ratio) for b in combined])
+            current, used = [], 0
+        else:
+            if current:
+                groups.append(current)
+            current, used = [block], block.height
+    if current:
+        groups.append(current)
+
+    # 最后一页本身占用不足 10% 时，尽可能并回前页。
+    if len(groups) > 1:
+        tail_used = sum(b.height for b in groups[-1]) + gap * (len(groups[-1]) - 1)
+        if tail_used < content_h * 0.10:
+            combined = groups[-2] + groups[-1]
+            compact_gap = max(8, gap // 2)
+            available = content_h - compact_gap * (len(combined) - 1)
+            ratio = min(1.0, available / sum(b.height for b in combined))
+            if ratio >= 0.90:
+                groups[-2] = [_resize_doc_block(b, ratio) for b in combined]
+                groups.pop()
+
+    pages = [_compose_a4_page(group, page_size, outer, content_h, gap, i, style, scale)
+             for i, group in enumerate(groups, 1)]
     if watermark:
-        pages = [_tile_watermark(p, scale) for p in pages]
+        pages = [_tile_watermark(page, scale) for page in pages]
     return pages
 
 
-def build_long_image(title, intro, items, watermark=True, size="big"):
-    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size)
+def build_long_image(title, intro, items, watermark=True, size="big", style=None):
+    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size, style=style)
     width = max(p.width for p in pages)
-    gap = 18
+    gap = 24
     total_h = sum(p.height for p in pages) + gap * (len(pages) - 1) + 40
     out = Image.new("RGB", (width, total_h), "#eef2ef")
     y = 20
@@ -1287,11 +1483,11 @@ def build_long_image(title, intro, items, watermark=True, size="big"):
     return out
 
 
-def build_doc_pdf(path, title, intro, items, watermark=True, size="big"):
-    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size)
+def build_doc_pdf(path, title, intro, items, watermark=True, size="big", style=None):
+    pages = build_doc_pages(title, intro, items, watermark=watermark, size=size, style=style)
     # quality=95 + 不降采样，避免 PIL 存 PDF 时把截图压糊
     pages[0].save(str(path), "PDF", save_all=True, append_images=pages[1:],
-                  resolution=150.0, quality=95)
+                  resolution=float(DOC_DPI), quality=95)
 
 
 class ExportDocWindow(tk.Toplevel):

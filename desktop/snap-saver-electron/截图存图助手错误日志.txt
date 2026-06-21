@@ -1,2 +1,22 @@
 
 [2026-06-20 09:41:43] 导出 PDF 失败：too many values to unpack (expected 2, got 3)
+
+[2026-06-21 21:02:40] Electron 后端命令 repair_image 失败：图片不存在。
+
+[2026-06-21 21:05:43] Electron 后端命令 list_folder_images 失败：文件夹不存在。
+
+[2026-06-21 21:06:14] Electron 后端命令 list_folder_images 失败：文件夹不存在。
+
+[2026-06-21 21:06:33] Electron 后端命令 list_folder_images 失败：文件夹不存在。
+
+[2026-06-21 21:22:29] Electron 后端命令 repair_image 失败：[WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+[2026-06-21 21:41:30] Electron 后端命令 list_folder_images 失败：文件夹不存在。
+
+[2026-06-21 22:12:26] Electron 后端命令 export_doc 失败：没有可导出的图片。
+
+[2026-06-21 22:12:42] Electron 后端命令 export_doc 失败：没有可导出的图片。
+
+[2026-06-21 22:13:02] Electron 后端命令 export_doc 失败：没有可导出的图片。
+
+[2026-06-21 22:37:49] Electron 后端命令 get_serial 失败：[Errno 22] Invalid argument

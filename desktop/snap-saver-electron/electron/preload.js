@@ -12,7 +12,11 @@ contextBridge.exposeInMainWorld("snapAPI", {
   // 选表格/文本文件 → 单个路径
   pickFile: () => ipcRenderer.invoke("pickFile"),
   // 选文件夹 → 路径
-  pickFolder: () => ipcRenderer.invoke("pickFolder"),
+  pickFolder: (options) => ipcRenderer.invoke("pickFolder", options),
+  // 用系统默认程序打开，并让主程序自动最小化
+  openExternalPath: (p) => ipcRenderer.invoke("openExternalPath", p),
+  // 把所见即所得编辑器内容导出为 PDF / 长图
+  exportRichDoc: (payload) => ipcRenderer.invoke("exportRichDoc", payload),
   // 读图为 dataURL（显示缩略图）
   readThumb: (p) => ipcRenderer.invoke("readThumb", p),
   // 开始截图（弹全屏框选层）

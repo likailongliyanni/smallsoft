@@ -340,6 +340,24 @@ def friendly_dashscope_error(code: str, message: str) -> str:
     return "图片修复失败，请稍后重试。"
 
 
+# 无代理 opener：彻底绕过系统代理 / 环境变量代理直连
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _urlopen_safe(request, timeout: int = 60):
+    """直连 opener：访问自己的公网服务器(tools.haobanfa.online)和阿里云 API
+    一律不走系统代理。这样用户开/关 VPN / Clash 都不受影响——系统残留代理
+    指向 127.0.0.1:端口（VPN 关掉后没人监听）正是 WinError 10061 的根因。
+
+    极端情况（公司网络强制必须经代理才能出网）下直连可能不通，那时再退回
+    系统默认（可能带代理）重试一次兜底。"""
+    try:
+        return _NO_PROXY_OPENER.open(request, timeout=timeout)
+    except (urllib.error.URLError, OSError):
+        # 直连不通：可能是必须走代理的网络环境，退回系统默认重试一次
+        return urllib.request.urlopen(request, timeout=timeout)
+
+
 def _ds_request(url: str, api_key: str, payload: dict | None = None,
                 headers: dict | None = None, timeout: int = 60) -> dict:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -350,7 +368,7 @@ def _ds_request(url: str, api_key: str, payload: dict | None = None,
     for key, value in (headers or {}).items():
         request.add_header(key, value)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _urlopen_safe(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
@@ -458,7 +476,7 @@ def server_register_device(server_url: str, software_id: str, legacy_id: str = "
     request.add_header("Content-Type", "application/json")
     request.add_header("Accept", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _urlopen_safe(request, timeout=30) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
@@ -478,7 +496,7 @@ def server_device_status(server_url: str, token: str) -> dict:
     request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Accept", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _urlopen_safe(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
@@ -497,7 +515,7 @@ def _server_upload(server_url: str, token: str, path: str, image_path: Path,
     request.add_header("Content-Type", content_type)
     request.add_header("Accept", "application/json" if expect_json else "image/jpeg")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _urlopen_safe(request, timeout=timeout) as response:
             data = response.read()
             if expect_json:
                 return json.loads(data.decode("utf-8"))
@@ -609,7 +627,7 @@ def ds_upload_image(api_key: str, path: Path) -> str:
     request = urllib.request.Request(str(data["upload_host"]), data=body, method="POST")
     request.add_header("Content-Type", content_type)
     try:
-        with urllib.request.urlopen(request, timeout=180):
+        with _urlopen_safe(request, timeout=180):
             pass
     except urllib.error.HTTPError as exc:
         raise DashScopeError("图片上传失败，请稍后重试。")
@@ -719,7 +737,7 @@ def ds_detect_watermark(api_key: str, path: Path, stop_event: threading.Event) -
 
 def ds_download_bytes(url: str) -> bytes:
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=180) as response:
+        with _urlopen_safe(urllib.request.Request(url), timeout=180) as response:
             return response.read()
     except Exception as exc:
         raise DashScopeError(f"下载结果图失败：{exc}")

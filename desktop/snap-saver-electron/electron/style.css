@@ -128,6 +128,7 @@ input[type="text"]:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgb
 .shot-thumb {
   width: 50px; height: 50px; border-radius: 9px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+  cursor: zoom-in;
 }
 .shot-thumb svg { width: 23px; height: 23px; }
 .thumb-blue { background: var(--blue-soft); } .thumb-blue svg { stroke: var(--blue); }
@@ -169,6 +170,20 @@ input[type="text"]:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgb
   border-top: 1px solid var(--border); background: #fbfdfc;
 }
 .doc-fields { display: flex; flex-direction: column; gap: 9px; margin-bottom: 12px; }
+.doc-modal { max-width: 980px; width: 94vw; height: 90vh; }
+.doc-fields #docIntro {
+  min-height: 70px; resize: vertical; font: inherit; line-height: 1.55;
+  padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: 7px;
+}
+.doc-design-panel {
+  display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 9px 12px;
+  padding: 12px; margin-bottom: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: #f7faf8;
+}
+.doc-design-panel label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.doc-design-panel label > span { font-size: 12px; color: var(--muted); }
+.doc-design-panel select, .doc-design-panel input { width: 100%; box-sizing: border-box; min-height: 32px; }
+@media (max-width: 760px) { .doc-design-panel { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
 .doc-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .doc-hint { font-size: 12px; color: var(--hint); }
 .doc-status { font-size: 13px; color: var(--green-dark); }
@@ -182,6 +197,7 @@ input[type="text"]:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgb
 .doc-thumb {
   width: 130px; height: 130px; border-radius: 8px; flex-shrink: 0;
   object-fit: contain; background: #f1f5f3; border: 1px solid var(--border);
+  cursor: zoom-in;
 }
 .doc-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .doc-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -204,6 +220,51 @@ select {
 }
 .doc-empty { text-align: center; color: var(--hint); font-size: 13px; padding: 40px 0; }
 
+/* ── 所见即所得文档编辑器 ── */
+.doc-editor-modal { width: 96vw; max-width: 1180px; height: 94vh; }
+.editor-save-hint { margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--hint); }
+.editor-actions {
+  display: flex; align-items: center; gap: 9px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border); background: #fbfdfc;
+}
+.editor-selection {
+  min-width: 180px; max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 12px; color: var(--hint);
+}
+.doc-quill-toolbar.ql-toolbar.ql-snow {
+  padding: 8px 14px; border: 0; border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+.doc-quill-toolbar .ql-formats { margin-right: 10px !important; }
+.doc-editor-stage {
+  flex: 1; overflow: auto; padding: 28px; background: #e9eeeb;
+}
+.doc-editor.ql-container.ql-snow {
+  width: 794px; min-height: 1123px; margin: 0 auto; border: 0;
+  background: #fff; box-shadow: 0 8px 26px rgba(25, 45, 34, .13);
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+.doc-editor.landscape.ql-container.ql-snow { width: 1123px; min-height: 794px; }
+.doc-editor .ql-editor {
+  min-height: inherit; padding: 66px 72px; color: #17211c;
+  font-size: 16px; line-height: 1.75;
+}
+.doc-editor .ql-editor h1 { margin: 0 0 20px; font-size: 34px; line-height: 1.25; color: #0b1f16; }
+.doc-editor .ql-editor h2 { margin: 28px 0 12px; color: #123b28; }
+.doc-editor .ql-editor p { margin: 0 0 12px; }
+.doc-editor .ql-editor img {
+  display: block; max-width: 100%; max-height: 720px; margin: 22px auto 12px;
+  border-radius: 10px; object-fit: contain; cursor: pointer;
+  transition: box-shadow .15s, transform .15s;
+}
+.doc-editor .ql-editor img:hover { box-shadow: 0 0 0 3px rgba(7,154,72,.14); }
+.doc-editor .ql-editor img.doc-image-selected { box-shadow: 0 0 0 3px var(--green); }
+.doc-editor .ql-editor blockquote {
+  margin: 14px 0; padding: 10px 14px; border-left: 4px solid var(--green);
+  border-radius: 0 7px 7px 0; background: var(--green-soft); color: #234b37;
+}
+.export-orientation { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+
 /* ── AI 修复 前后对比 ── */
 .repair-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
 .repair-pane { display: flex; flex-direction: column; gap: 6px; }
@@ -225,6 +286,11 @@ select {
 .repair-card.sel { border-color: var(--green); box-shadow: 0 0 0 2px rgba(7,154,72,.18); }
 .repair-card .rc-img { width: 100%; height: 110px; object-fit: cover; display: block; background: #f1f5f3; }
 .repair-card .rc-name { font-size: 11px; color: var(--muted); padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repair-card .rc-error {
+  font-size: 10px; line-height: 1.35; color: #b42318; background: #fff1f0;
+  padding: 5px 7px; min-height: 28px; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
 .repair-card .rc-check {
   position: absolute; top: 6px; left: 6px; width: 20px; height: 20px; border-radius: 5px;
   background: rgba(255,255,255,0.9); border: 1px solid var(--border-strong);
