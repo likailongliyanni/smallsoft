@@ -11,4 +11,14 @@ contextBridge.exposeInMainWorld("snapAPI", {
   pickImages: () => ipcRenderer.invoke("pickImages"),
   // 读图为 dataURL（显示缩略图）
   readThumb: (p) => ipcRenderer.invoke("readThumb", p),
+  // 开始截图（弹全屏框选层）
+  startCapture: () => ipcRenderer.invoke("startCapture"),
+  // 截图保存完成回调
+  onCaptureSaved: (cb) => ipcRenderer.on("capture-saved", (_e, res) => cb(res)),
+});
+
+// 截图覆盖层（capture.html）专用桥
+contextBridge.exposeInMainWorld("captureAPI", {
+  onBg: (cb) => ipcRenderer.on("capture-bg", (_e, data) => cb(data)),
+  done: (data) => ipcRenderer.send("capture-done", data),
 });

@@ -166,6 +166,34 @@ def cmd_open_path(args):
     return {"ok": True}
 
 
+def cmd_save_capture(args):
+    """保存一张截图到「自由截图」目录。args: {data_url} 或 {png_base64}
+    返回 {path}。与原版命名一致：截图_时间戳.jpg。"""
+    import base64
+    import io as _io
+    raw = args.get("png_base64") or ""
+    if not raw and args.get("data_url"):
+        du = str(args["data_url"])
+        raw = du.split(",", 1)[1] if "," in du else du
+    if not raw:
+        raise RuntimeError("没有图像数据。")
+    img_bytes = base64.b64decode(raw)
+    img = S.Image.open(_io.BytesIO(img_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    out_dir = Path(S.app_dir()) / "存图结果" / "自由截图"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = S.time.strftime("%Y%m%d-%H%M%S")
+    target = out_dir / f"截图_{stamp}.jpg"
+    idx = 2
+    while target.exists():
+        target = out_dir / f"截图_{stamp}-{idx}.jpg"
+        idx += 1
+    img.save(target, "JPEG", quality=95)
+    return {"path": str(target), "name": target.name, "w": img.width, "h": img.height, "dir": str(out_dir)}
+
+
 def cmd_repair_modes(args):
     """返回 AI 修复的 5 种模式（去水印/去贴纸/去广告/清爽化/白底上图）。"""
     return {"modes": [{"key": k, "label": v} for k, v in S.REPAIR_MODES]}
@@ -213,6 +241,7 @@ HANDLERS = {
     "open_path": cmd_open_path,
     "repair_modes": cmd_repair_modes,
     "repair_image": cmd_repair_image,
+    "save_capture": cmd_save_capture,
 }
 
 

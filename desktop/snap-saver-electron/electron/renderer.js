@@ -258,4 +258,41 @@ $("repairOpen")?.addEventListener("click", () => {
   }
 });
 
-window.addEventListener("DOMContentLoaded", init);
+// ───────────────────────── 截图 ─────────────────────────
+const shots = []; // [{path, name, w, h, thumb}]
+
+function renderShots() {
+  const list = $("shotList");
+  $("shotCount").textContent = "共 " + shots.length + " 张";
+  if (shots.length === 0) {
+    list.innerHTML = '<div class="doc-empty">点「开始截图」框选屏幕，或「自由截图」连续截图。截好的图会列在这里。</div>';
+    return;
+  }
+  list.innerHTML = "";
+  shots.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "shot";
+    row.innerHTML = `
+      <div class="shot-thumb" style="background:#f1f5f3;overflow:hidden">${s.thumb ? `<img src="${s.thumb}" style="width:100%;height:100%;object-fit:cover">` : ""}</div>
+      <div class="shot-info"><div class="shot-name">${s.name}</div><div class="shot-meta">${s.w} × ${s.h}</div></div>
+      <span class="pill pill-ok">✓ 已保存</span>`;
+    list.appendChild(row);
+  });
+}
+
+$("captureBtn")?.addEventListener("click", async () => {
+  const r = await window.snapAPI.startCapture();
+  if (!r.ok) setBadge("● 截图失败", false);
+});
+
+// 截图保存完成 → 加入进度列表
+window.snapAPI.onCaptureSaved(async (res) => {
+  if (!res || res.error) { setBadge("● 截图失败", false); return; }
+  let thumb = "";
+  try { thumb = await window.snapAPI.readThumb(res.path); } catch {}
+  shots.unshift({ path: res.path, name: res.name, w: res.w, h: res.h, thumb });
+  renderShots();
+  setBadge("● 已就绪", true);
+});
+
+window.addEventListener("DOMContentLoaded", () => { init(); renderShots(); });

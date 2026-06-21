@@ -62,7 +62,7 @@
 
       <!-- 工具栏 -->
       <div class="toolbar">
-        <button class="btn btn-blue"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>开始截图</button>
+        <button class="btn btn-blue" id="captureBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>开始截图</button>
         <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 3v4H2m4 0h12a2 2 0 0 1 2 2v9m0 0h-4m4 0v4M3 6v12a2 2 0 0 0 2 2h12"/></svg>自由截图</button>
         <button class="btn" id="importBtn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M21 15V8a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7"/><path d="M16 19h6M19 16v6"/></svg>导入图片</button>
         <div class="toolbar-divider"></div>
@@ -136,25 +136,11 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
           截图进度
         </div>
-        <span class="list-count">共 3 张</span>
+        <span class="list-count" id="shotCount">共 0 张</span>
       </div>
 
-      <div class="shot-list">
-        <div class="shot">
-          <div class="shot-thumb thumb-blue"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
-          <div class="shot-info"><div class="shot-name">商品主图_01.jpg</div><div class="shot-meta">1600 × 1000 · 全宽排版</div></div>
-          <span class="pill pill-ok">✓ 已描述</span>
-        </div>
-        <div class="shot">
-          <div class="shot-thumb thumb-amber"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
-          <div class="shot-info"><div class="shot-name">详情页_02.jpg</div><div class="shot-meta">800 × 1200 · 图左文右环绕</div></div>
-          <span class="pill pill-run">⟳ 生成中</span>
-        </div>
-        <div class="shot">
-          <div class="shot-thumb thumb-gray"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div>
-          <div class="shot-info"><div class="shot-name">细节图_03.jpg</div><div class="shot-meta">1200 × 800 · 二分之一</div></div>
-          <button class="btn" style="font-size:12px;padding:6px 12px"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M5 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" transform="translate(3 2)"/></svg>AI 描述</button>
-        </div>
+      <div class="shot-list" id="shotList">
+        <div class="doc-empty">点「开始截图」框选屏幕，或「自由截图」连续截图。截好的图会列在这里。</div>
       </div>
 
     </main>

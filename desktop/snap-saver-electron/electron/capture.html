@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; cursor: crosshair; user-select: none; }
+    #bg { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    #dim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); }
+    #sel {
+      position: fixed; border: 2px solid #16a34a; box-shadow: 0 0 0 99999px rgba(0,0,0,0.45);
+      display: none; pointer-events: none;
+    }
+    #size {
+      position: fixed; background: #16a34a; color: #fff; font: 12px "Microsoft YaHei UI", sans-serif;
+      padding: 3px 8px; border-radius: 4px; display: none; pointer-events: none; white-space: nowrap;
+    }
+    #tip {
+      position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.72); color: #fff; font: 13px "Microsoft YaHei UI", sans-serif;
+      padding: 8px 18px; border-radius: 8px; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <img id="bg" alt="" />
+  <div id="dim"></div>
+  <div id="sel"></div>
+  <div id="size"></div>
+  <div id="tip">拖动鼠标框选要截的区域 · 松开自动保存 · 按 Esc 取消</div>
+  <script src="capture.js"></script>
+</body>
+</html>

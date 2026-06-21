@@ -1,8 +1,11 @@
 // Electron 主进程：开窗口 + 启动 Python 后端(backend.py) + 转发界面命令。
-const { app, BrowserWindow, ipcMain, clipboard, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, clipboard, dialog, desktopCapturer, screen } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
+
+let mainWin = null;
+let captureWin = null;
 
 let pyProc = null;
 let pyBuffer = "";
@@ -71,7 +74,62 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, "index.html"));
+  mainWin = win;
 }
+
+// ── 截图：抓全屏 → 全屏覆盖层框选 → 裁剪存盘 ──
+async function startCapture() {
+  // 主屏尺寸（含缩放）
+  const primary = screen.getPrimaryDisplay();
+  const { width, height } = primary.size;
+  const scale = primary.scaleFactor || 1;
+
+  // 抓整屏（按物理像素，避免高分屏糊）
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: Math.round(width * scale), height: Math.round(height * scale) },
+  });
+  if (!sources.length) throw new Error("无法获取屏幕画面");
+  const fullPng = sources[0].thumbnail.toDataURL();
+
+  // 隐藏主窗口，避免遮挡截图
+  if (mainWin) mainWin.hide();
+  await new Promise((r) => setTimeout(r, 180));
+
+  captureWin = new BrowserWindow({
+    x: 0, y: 0, width, height,
+    frame: false, transparent: false, fullscreen: true,
+    alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: false,
+    backgroundColor: "#000000",
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true },
+  });
+  await captureWin.loadFile(path.join(__dirname, "capture.html"));
+  captureWin.webContents.send("capture-bg", { img: fullPng, w: width, h: height, scale });
+  captureWin.focus();
+}
+
+// 覆盖层框选完成：data{ dataURL } 或取消
+ipcMain.on("capture-done", async (_e, data) => {
+  if (captureWin) { captureWin.close(); captureWin = null; }
+  if (mainWin) mainWin.show();
+  if (data && data.dataURL) {
+    try {
+      const raw = data.dataURL.split(",")[1];
+      const res = await callBackend("save_capture", { png_base64: raw });
+      if (mainWin) mainWin.webContents.send("capture-saved", res);
+    } catch (err) {
+      if (mainWin) mainWin.webContents.send("capture-saved", { error: err.message });
+    }
+  }
+});
+
+ipcMain.handle("startCapture", async () => {
+  try { await startCapture(); return { ok: true }; }
+  catch (e) {
+    if (mainWin) mainWin.show();
+    return { ok: false, error: e.message };
+  }
+});
 
 // IPC：界面 → 主进程 → Python
 ipcMain.handle("backend", async (_e, cmd, args) => {
