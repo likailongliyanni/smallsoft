@@ -44,7 +44,8 @@ def _configured_output_dir(value=None, create=True) -> Path:
     raw = str(value or "").strip()
     if not raw:
         raw = str((S.load_config() or {}).get("output_dir") or "").strip()
-    path = Path(raw).expanduser() if raw else Path(S.app_dir()) / "存图结果"
+    # Electron 版默认放到用户文档，避免打包后结果藏在 exe/项目目录深处。
+    path = Path(raw).expanduser() if raw else Path.home() / "Documents" / "存图结果"
     if create:
         path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
@@ -52,11 +53,13 @@ def _configured_output_dir(value=None, create=True) -> Path:
 
 def cmd_get_settings(args):
     output_dir = _configured_output_dir()
+    config = S.load_config() or {}
     return {
         "output_dir": str(output_dir),
         "free_dir": str(output_dir / "自由截图"),
         "repair_dir": str(output_dir / "AI修复"),
         "doc_dir": str(output_dir / "文档"),
+        "keep_original": bool(config.get("keep_original", False)),
     }
 
 
@@ -68,6 +71,12 @@ def cmd_set_output_dir(args):
     S.save_config({"output_dir": str(output_dir)})
     _WORKER.out_dir = output_dir
     return {"output_dir": str(output_dir)}
+
+
+def cmd_set_keep_original(args):
+    keep = bool(args.get("keep_original", False))
+    S.save_config({"keep_original": keep})
+    return {"keep_original": keep}
 
 
 def _pretty_serial(raw: str) -> str:
@@ -158,6 +167,17 @@ def cmd_describe_image(args):
     return {"description": res.get("description", ""), "charged": bool(res.get("charged"))}
 
 
+def cmd_generate_product_params(args):
+    """把一句商品介绍交给服务器 AI，拆成可编辑的参数表。"""
+    text = str(args.get("text") or "").strip()
+    if not text:
+        raise RuntimeError("请先输入一句商品介绍。")
+    if not _STATE["token"]:
+        data = S.server_register_device(_server_url(), S.local_software_id())
+        _STATE["token"] = str(data.get("token") or "")
+    return S.server_generate_product_params(_server_url(), _STATE["token"], text)
+
+
 def cmd_export_doc(args):
     """导出整理文档。args: {title, intro, items:[{path,caption,size}], format:'pdf'|'long', watermark}"""
     title = str(args.get("title") or "使用说明")
@@ -230,8 +250,9 @@ def cmd_stitch_long_image(args):
     out_dir.mkdir(parents=True, exist_ok=True)
     title = S.safe_folder_name(str(args.get("title") or "使用说明"), "使用说明")
     stamp = S.time.strftime("%Y%m%d-%H%M%S")
-    out = out_dir / f"{title}_{stamp}.jpg"
-    canvas.save(out, "JPEG", quality=94, optimize=True)
+    # 长图使用 PNG 无损保存，避免文字边缘和商品图二次 JPEG 压缩后出现颗粒。
+    out = out_dir / f"{title}_{stamp}.png"
+    canvas.save(out, "PNG", optimize=True)
     return {"path": str(out), "dir": str(out_dir), "width": width, "height": height}
 
 
@@ -786,7 +807,15 @@ def cmd_list_folder_images(args):
                 w, h = im.size
         except Exception:
             w, h = 0, 0
-        images.append({"path": str(p.resolve()), "name": p.name, "w": w, "h": h})
+        try:
+            stat = p.stat()
+            mtime_ns, size = stat.st_mtime_ns, stat.st_size
+        except OSError:
+            mtime_ns, size = 0, 0
+        images.append({
+            "path": str(p.resolve()), "name": p.name, "w": w, "h": h,
+            "mtime_ns": mtime_ns, "size": size,
+        })
     return {"images": images, "dir": str(d.resolve())}
 
 
@@ -870,31 +899,45 @@ def cmd_repair_image(args):
         raise RuntimeError(f"图片不存在：{src}")
     _ensure_token()
 
-    # 输出：AI修复 目录下，文件名加 _修复 后缀（不覆盖原图，更安全，界面能对比）
-    out_dir = _configured_output_dir(args.get("out_dir")) / "AI修复"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / (src.stem + "_修复.jpg")
-    index = 2
-    while target.exists():
-        target = out_dir / f"{src.stem}_修复-{index}.jpg"
-        index += 1
-
+    # 先写同目录临时文件，成功后再原子替换，避免接口失败损坏原图。
+    target = src.parent / f".{src.name}.{S.uuid.uuid4().hex}.repair"
+    backup_target = None
     stop = threading.Event()
-    with _tf.TemporaryDirectory(prefix="snap_repair_") as tmp:
-        S.server_remove_watermark_to(
-            _server_url(), _STATE["token"], src, target, Path(tmp), mode, stop)
-    return {"out": str(target), "dir": str(out_dir)}
+    try:
+        with _tf.TemporaryDirectory(prefix="snap_repair_") as tmp:
+            S.server_remove_watermark_to(
+                _server_url(), _STATE["token"], src, target, Path(tmp), mode, stop)
+        if keep:
+            backup_dir = src.parent / S.BACKUP_DIR_NAME
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_target = backup_dir / src.name
+            S.shutil.copy2(src, backup_target)
+        S.os.replace(target, src)
+    finally:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+    stat = src.stat()
+    return {
+        "out": str(src), "dir": str(src.parent),
+        "backup": str(backup_target) if backup_target else "",
+        "replaced": True,
+        "mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
+    }
 
 
 HANDLERS = {
     "get_settings": cmd_get_settings,
     "set_output_dir": cmd_set_output_dir,
+    "set_keep_original": cmd_set_keep_original,
     "ping": cmd_ping,
     "get_serial": cmd_get_serial,
     "register": cmd_register,
     "sync_quota": cmd_sync_quota,
     "list_shots": cmd_list_shots,
     "describe_image": cmd_describe_image,
+    "generate_product_params": cmd_generate_product_params,
     "export_doc": cmd_export_doc,
     "stitch_long_image": cmd_stitch_long_image,
     "open_path": cmd_open_path,

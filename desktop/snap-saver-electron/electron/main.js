@@ -348,27 +348,40 @@ function sanitizeEditorHtml(value) {
     .replace(/javascript\s*:/gi, "");
 }
 
-function richDocumentHtml(editorHtml, orientation) {
+function richDocumentHtml(editorHtml, orientation, theme = "plain") {
   const quillCss = fs.readFileSync(path.join(__dirname, "node_modules", "quill", "dist", "quill.core.css"), "utf8");
   const page = orientation === "landscape" ? "A4 landscape" : "A4 portrait";
+  const themeClass = theme === "green" ? " theme-green" : "";
   return `<!doctype html><html><head><meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">
     <style>${quillCss}
       @page { size: ${page}; margin: 16mm; }
       * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; background: #fff; color: #17211c; }
+      html, body { margin: 0; padding: 0; background: #fff; color: #111; }
       body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; }
       .document { width: 100%; max-width: 980px; margin: 0 auto; padding: 58px 68px; font-size: 16px; line-height: 1.75; }
-      .document h1 { margin: 0 0 22px; font-size: 36px; line-height: 1.25; color: #0b1f16; }
-      .document h2 { margin: 30px 0 13px; color: #123b28; }
+      .document h1 { margin: 0 0 22px; font-size: 36px; line-height: 1.25; color: #111; }
+      .document h2 { margin: 30px 0 13px; color: #111; }
       .document h3 { margin: 24px 0 10px; }
       .document p { margin: 0 0 12px; }
-      .document img { display: block; max-width: 100%; max-height: 900px; margin: 22px auto 12px; border-radius: 10px; object-fit: contain; }
-      .document blockquote { margin: 14px 0; padding: 10px 14px; border-left: 4px solid #079a48; background: #eefbf3; color: #234b37; }
+      .document img { display: block; width: auto; max-width: 100%; max-height: 900px; margin: 22px auto 12px; border-radius: 0; object-fit: contain; }
+      .document img.selling-point-image { padding: 12px; background: #fff; border: 0; }
+      .document blockquote { margin: 14px 0; padding: 0; border: 0; background: #fff; color: #111; }
+      .product-params-block { margin: 16px 0 24px; }
+      .product-params-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      .product-params-table th, .product-params-table td { padding: 10px 12px; border: 1px solid #d5d5d5; text-align: left; vertical-align: top; }
+      .product-params-table th { width: 28%; background: #fff; color: #111; font-weight: 600; }
+      .product-params-table td { background: #fff; word-break: break-word; }
+      .document.theme-green h1 { color: #0b1f16; }
+      .document.theme-green h2 { color: #123b28; }
+      .document.theme-green img.selling-point-image { border: 1px solid #edf0ee; }
+      .document.theme-green blockquote { padding: 10px 14px; border-left: 4px solid #079a48; background: #eefbf3; color: #234b37; }
+      .document.theme-green .product-params-table th, .document.theme-green .product-params-table td { border-color: #dce6e0; }
+      .document.theme-green .product-params-table th { background: #f1f7f3; color: #234b37; }
       .ql-align-center { text-align: center; } .ql-align-right { text-align: right; } .ql-align-justify { text-align: justify; }
       .ql-size-small { font-size: .75em; } .ql-size-large { font-size: 1.5em; } .ql-size-huge { font-size: 2.5em; }
       @media print { .document { max-width: none; padding: 0; } }
-    </style></head><body><main class="document ql-editor">${sanitizeEditorHtml(editorHtml)}</main></body></html>`;
+    </style></head><body><main class="document ql-editor${themeClass}">${sanitizeEditorHtml(editorHtml)}</main></body></html>`;
 }
 
 ipcMain.handle("exportRichDoc", async (_e, payload = {}) => {
@@ -376,8 +389,9 @@ ipcMain.handle("exportRichDoc", async (_e, payload = {}) => {
   const tempFiles = [];
   try {
     const orientation = payload.orientation === "landscape" ? "landscape" : "portrait";
-    const format = payload.format === "long" ? "long" : "pdf";
-    const outRoot = path.resolve(String(payload.outDir || path.join(__dirname, "..", "存图结果")));
+    const format = ["long", "segments"].includes(payload.format) ? payload.format : "pdf";
+    const theme = payload.theme === "green" ? "green" : "plain";
+    const outRoot = path.resolve(String(payload.outDir || path.join(app.getPath("documents"), "存图结果")));
     const outDir = path.join(outRoot, "文档");
     fs.mkdirSync(outDir, { recursive: true });
     const title = safeDocName(payload.title);
@@ -386,15 +400,26 @@ ipcMain.handle("exportRichDoc", async (_e, payload = {}) => {
       now.getHours(), now.getMinutes(), now.getSeconds()]
       .map((value) => String(value).padStart(2, "0")).join("");
     const htmlPath = path.join(app.getPath("temp"), `snap-rich-${process.pid}-${Date.now()}.html`);
-    fs.writeFileSync(htmlPath, richDocumentHtml(payload.html, orientation), "utf8");
+    fs.writeFileSync(htmlPath, richDocumentHtml(payload.html, orientation, theme), "utf8");
     tempFiles.push(htmlPath);
     const viewportWidth = orientation === "landscape" ? 1500 : 1120;
+    const bitmapScale = format === "pdf" ? 1 : 2;
     renderWin = new BrowserWindow({
       show: false, width: viewportWidth, height: 900, frame: false,
       enableLargerThanScreen: true,
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true, offscreen: format !== "pdf",
+      },
     });
     await renderWin.loadFile(htmlPath);
+    if (format !== "pdf") {
+      // 设备像素比 2：保持 1120/1500 CSS 排版宽度，同时实际截图输出双倍像素。
+      renderWin.webContents.debugger.attach("1.3");
+      await renderWin.webContents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+        width: viewportWidth * bitmapScale, height: 900 * bitmapScale,
+        deviceScaleFactor: bitmapScale, mobile: false,
+      });
+    }
     await renderWin.webContents.executeJavaScript(
       `Promise.all(Array.from(document.images).map(img => img.complete ? true : new Promise(resolve => { img.onload = img.onerror = resolve; })))`);
 
@@ -408,13 +433,63 @@ ipcMain.handle("exportRichDoc", async (_e, payload = {}) => {
       return { ok: true, path: target, dir: outDir };
     }
 
+    if (format === "segments") {
+      const blocks = await renderWin.webContents.executeJavaScript(
+        "Array.from(document.querySelector('.document').children).map(function(el){ return { tag: el.tagName, className: String(el.className || ''), html: el.outerHTML }; })");
+      const groups = [];
+      let current = [];
+      for (const block of blocks) {
+        const isHeading = /^H[1-3]$/.test(block.tag);
+        const isImage = block.tag === "IMG";
+        const currentHasImage = current.some((item) => item.tag === "IMG");
+        if (current.length && (isHeading || (isImage && currentHasImage))) {
+          groups.push(current);
+          current = [];
+        }
+        current.push(block);
+      }
+      if (current.length) groups.push(current);
+      if (!groups.length) throw new Error("文档中没有可导出的内容块。");
+
+      const segmentDir = path.join(outDir, title + "_" + stamp + "_分段图");
+      fs.mkdirSync(segmentDir, { recursive: true });
+      const paths = [];
+      for (let index = 0; index < groups.length; index++) {
+        const segmentHtmlPath = path.join(
+          app.getPath("temp"),
+          "snap-segment-" + process.pid + "-" + Date.now() + "-" + index + ".html");
+        const content = groups[index].map((item) => item.html).join("");
+        fs.writeFileSync(segmentHtmlPath, richDocumentHtml(content, "portrait", theme), "utf8");
+        tempFiles.push(segmentHtmlPath);
+        await renderWin.loadFile(segmentHtmlPath);
+        await renderWin.webContents.executeJavaScript(
+          "Promise.all(Array.from(document.images).map(function(img){ return img.complete ? true : new Promise(function(resolve){ img.onload = img.onerror = resolve; }); }))");
+        const height = await renderWin.webContents.executeJavaScript(
+          "Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))");
+        const segmentHeight = Math.max(320, Math.min(4500, height));
+        await renderWin.webContents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+          width: viewportWidth * bitmapScale, height: segmentHeight * bitmapScale,
+          deviceScaleFactor: bitmapScale, mobile: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        const image = await renderWin.webContents.capturePage();
+        const target = path.join(segmentDir, String(index + 1).padStart(2, "0") + ".png");
+        fs.writeFileSync(target, image.toPNG());
+        paths.push(target);
+      }
+      return { ok: true, path: paths[0], paths, dir: segmentDir };
+    }
+
     const docHeight = await renderWin.webContents.executeJavaScript(
       `Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))`);
     const slicePaths = [];
-    const maxSlice = 9000;
+    const maxSlice = 4000;
     for (let y = 0, part = 0; y < docHeight; y += maxSlice, part++) {
       const height = Math.min(maxSlice, docHeight - y);
-      renderWin.setContentSize(viewportWidth, height);
+      await renderWin.webContents.debugger.sendCommand("Emulation.setDeviceMetricsOverride", {
+        width: viewportWidth * bitmapScale, height: height * bitmapScale,
+        deviceScaleFactor: bitmapScale, mobile: false,
+      });
       await renderWin.webContents.executeJavaScript(`window.scrollTo(0, ${y})`);
       await new Promise((resolve) => setTimeout(resolve, 80));
       const image = await renderWin.webContents.capturePage();
@@ -430,7 +505,10 @@ ipcMain.handle("exportRichDoc", async (_e, payload = {}) => {
   } catch (error) {
     return { ok: false, error: error.message || String(error) };
   } finally {
-    if (renderWin && !renderWin.isDestroyed()) renderWin.destroy();
+    if (renderWin && !renderWin.isDestroyed()) {
+      try { if (renderWin.webContents.debugger.isAttached()) renderWin.webContents.debugger.detach(); } catch {}
+      renderWin.destroy();
+    }
     for (const file of tempFiles) {
       try { fs.unlinkSync(file); } catch {}
     }

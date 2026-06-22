@@ -4,7 +4,8 @@
   "description": "智能截图软件 (Electron 界面版)",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test:ui": "electron smoke-test.cjs"
   },
   "author": "好办法",
   "license": "ISC",

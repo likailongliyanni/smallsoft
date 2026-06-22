@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\QuotaLog;
 use App\Models\User;
 use App\Services\ImageDescribeService;
+use App\Services\ProductParamsService;
 use App\Services\TokenService;
 use App\Services\WatermarkAiService;
 use Illuminate\Support\Facades\DB;
@@ -100,6 +101,25 @@ class DesktopWatermarkController extends Controller
                 'charged' => $charge,
                 'remaining' => $remaining,
             ]);
+        } catch (Throwable $e) {
+            abort(422, $e->getMessage());
+        }
+    }
+
+    /** 一句话商品介绍 → 可编辑的商品参数表。 */
+    public function generateParams(Request $request, TokenService $tokens, ProductParamsService $service): array
+    {
+        @set_time_limit(100);
+
+        $user = $tokens->userFromRequest($request);
+        abort_if(! $user, 401, '请先登记软件编号');
+
+        $data = $request->validate([
+            'text' => ['required', 'string', 'max:1000'],
+        ]);
+
+        try {
+            return $this->ok($service->generate((string) $data['text']));
         } catch (Throwable $e) {
             abort(422, $e->getMessage());
         }

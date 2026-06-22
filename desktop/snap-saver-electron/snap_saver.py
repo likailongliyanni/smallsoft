@@ -505,6 +505,27 @@ def server_device_status(server_url: str, token: str) -> dict:
         raise ServerApiError(f"连接服务器失败：{exc.reason}")
 
 
+def _server_json_post(server_url: str, token: str, path: str, body: dict,
+                      timeout: int = 90) -> dict:
+    """向桌面端接口发送带设备 token 的 JSON 请求。"""
+    if not token:
+        raise ServerApiError("请先登记软件编号。")
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        normalize_server_url(server_url) + path, data=payload, method="POST")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Content-Type", "application/json; charset=utf-8")
+    request.add_header("Accept", "application/json")
+    try:
+        with _urlopen_safe(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        raise ServerApiError(_server_error_from_body(raw, f"服务器请求失败：HTTP {exc.code}"))
+    except urllib.error.URLError as exc:
+        raise ServerApiError(f"连接服务器失败：{exc.reason}")
+
+
 def _server_upload(server_url: str, token: str, path: str, image_path: Path,
                    timeout: int, expect_json: bool, fields: list | None = None):
     if not token:
@@ -603,6 +624,21 @@ def server_describe_image(server_url: str, token: str, path: Path,
         "charged": bool(response.get("charged")),
         "remaining": response.get("remaining"),
     }
+
+
+def server_generate_product_params(server_url: str, token: str, text: str) -> dict:
+    """一句商品介绍 → 标题 + 参数行。"""
+    response = _server_json_post(
+        server_url, token, "/api/desktop/doc/generate-params", {"text": text}, timeout=90)
+    rows = []
+    for item in response.get("params") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if name and value:
+            rows.append({"name": name[:30], "value": value[:120]})
+    return {"title": str(response.get("title") or "").strip()[:80], "params": rows[:12]}
 
 
 def ds_upload_image(api_key: str, path: Path) -> str:
