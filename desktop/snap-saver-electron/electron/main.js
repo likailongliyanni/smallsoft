@@ -198,6 +198,7 @@ function callBackend(cmd, args) {
     const id = ++reqId;
     const timeoutMs = cmd === "repair_image" ? 480000
       : cmd === "describe_image" ? 180000
+      : cmd === "reconstruct_scene" ? 960000
       : cmd === "export_doc" ? 120000
       : 60000;
     const timer = setTimeout(() => {

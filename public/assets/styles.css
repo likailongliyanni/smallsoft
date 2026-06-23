@@ -2404,6 +2404,73 @@ table .empty { text-align: center; color: #94a3b8; padding: 30px !important; fon
     line-height: 1.6;
 }
 
+/* 智能统计：维度 / 度量编辑行 */
+.pivot-group {
+    margin-bottom: 16px;
+}
+
+.pivot-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.pivot-group-head h3 {
+    margin: 0;
+    font-size: 14px;
+}
+
+.pivot-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pivot-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.pivot-row select,
+.pivot-row input {
+    height: 34px;
+    padding: 0 8px;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.pivot-row .pivot-col {
+    flex: 1 1 180px;
+    min-width: 140px;
+}
+
+.pivot-row .pivot-bucket,
+.pivot-row .pivot-agg {
+    flex: 0 0 120px;
+}
+
+.pivot-row .pivot-label {
+    flex: 1 1 140px;
+    min-width: 120px;
+}
+
+.pivot-row .pivot-del {
+    flex: none;
+}
+
+.excel-sheet-select {
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #fff;
+    max-width: 240px;
+}
+
 .merge-field-chips-row {
     display: flex;
     align-items: flex-start;
