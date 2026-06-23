@@ -122,7 +122,7 @@ class DesktopWatermarkController extends Controller
         $data = $request->validate([
             'images' => ['required', 'array', 'min:1', 'max:6'],
             'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
-            'ratio' => ['nullable', 'string', 'in:1:1,4:5,3:4,16:9'],
+            'ratio' => ['nullable', 'string', 'in:1:1,4:5,3:4,16:9,9:16,3:2,2:3,1:2'],
             'usage' => ['nullable', 'string', 'in:main,detail_header,scene,poster'],
             'style' => ['nullable', 'string', 'in:auto,studio,lifestyle,premium,fresh'],
             'strength' => ['nullable', 'string', 'in:standard,high'],

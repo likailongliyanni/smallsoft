@@ -24,7 +24,7 @@ class SceneReconstructService
     private const FALLBACK_VISION_MODEL = 'qwen3.6-plus';
     private const FALLBACK_GEN_MODEL = 'wan2.7-image';
 
-    public const RATIOS = ['1:1', '4:5', '3:4', '16:9'];
+    public const RATIOS = ['1:1', '4:5', '3:4', '16:9', '9:16', '3:2', '2:3', '1:2'];
     public const USAGES = ['main', 'detail_header', 'scene', 'poster'];
     public const STYLES = ['auto', 'studio', 'lifestyle', 'premium', 'fresh'];
     public const STRENGTHS = ['standard', 'high'];
@@ -249,6 +249,10 @@ PROMPT;
             '4:5' => '1024*1280',
             '3:4' => '960*1280',
             '16:9' => '1280*720',
+            '9:16' => '720*1280',
+            '3:2' => '1248*832',
+            '2:3' => '832*1248',
+            '1:2' => '720*1440',
             default => '1024*1024',
         };
     }

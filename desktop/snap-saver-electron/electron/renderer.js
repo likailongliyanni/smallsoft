@@ -646,7 +646,9 @@ function renderRepairGrid() {
     ? `共 ${repairImgs.length} 张，选中 ${selCount}${repairSourceDir ? " · 自动刷新" : ""}`
     : (repairSourceDir ? "自动刷新中" : "");
   $("repairRun").disabled = repairRunning || runnableCount === 0;
-  if ($("repairCompose")) $("repairCompose").disabled = repairRunning || selCount < 2;
+  // 场景主图 1 张起；组合海报至少 2 张（拼图/AI 海报都要多张参考）
+  if ($("repairScene")) $("repairScene").disabled = repairRunning || selCount < 1;
+  if ($("repairPoster")) $("repairPoster").disabled = repairRunning || selCount < 2;
   if (!has) {
     grid.innerHTML = repairSourceDir
       ? '<div class="doc-empty">当前目录暂无图片；软件正在监控，新增图片后会自动显示。</div>'
@@ -699,17 +701,75 @@ $("repairSelNone")?.addEventListener("click", () => { repairImgs.forEach((x) => 
 // AI 商品主视觉：把勾选的参考图（第 1 张为主体）交给 AI，重新生成一张全新电商图。
 let sceneGenerating = false;
 let sceneResultPath = "";
+let sceneMode = "main";      // "main"=场景主图 | "poster"=组合海报
 
-$("repairCompose")?.addEventListener("click", () => {
+function sceneOutputSubdir() {
+  const base = String(outputDir || "").replace(/[\\\/]+$/, "");
+  if (!base) return "";
+  const sep = base.includes("\\") ? "\\" : "/";
+  return `${base}${sep}${sceneMode === "poster" ? "组合图" : "AI主视觉"}`;
+}
+
+function posterIsAI() { return sceneMode === "poster" && $("posterMethod")?.value === "ai"; }
+function sceneUsesAI() { return sceneMode === "main" || posterIsAI(); }
+
+// 按模式/做法 显示对应控件：AI 路径才显示用途/风格/强度/留白；海报才显示做法。
+function applySceneMode() {
+  document.querySelectorAll(".scene-mode-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === sceneMode));
+  const isPoster = sceneMode === "poster";
+  const usesAI = sceneUsesAI();
+  document.querySelectorAll(".scene-only-poster").forEach((el) => { el.style.display = isPoster ? "" : "none"; });
+  document.querySelectorAll(".scene-only-ai").forEach((el) => { el.style.display = usesAI ? "" : "none"; });
+  $("sceneTip").style.display = sceneMode === "main" ? "" : "none";
+  $("sceneTitle").textContent = isPoster ? "组合海报" : "AI 场景主图";
+  if (sceneMode === "main") $("sceneUsage").value = "main";
+  else if ($("sceneUsage").value === "main") $("sceneUsage").value = "poster";
+}
+
+document.querySelectorAll(".scene-mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => { sceneMode = btn.dataset.mode; applySceneMode(); });
+});
+$("posterMethod")?.addEventListener("change", applySceneMode);
+
+function openSceneModal(mode) {
   const chosen = repairSelectedOrdered();
-  if (chosen.length < 2) { $("repairStatus").textContent = "请至少勾选 2 张同一商品的参考图（第 1 张为商品主体）。"; return; }
-  $("sceneIntro").textContent = `已选 ${chosen.length} 张参考图（第 1 张「${chosen[0].name}」为商品主体）。AI 会先分析、锁定商品特征，再重新生成一张全新电商图。`;
+  const min = mode === "poster" ? 2 : 1;
+  if (chosen.length < min) {
+    $("repairStatus").textContent = mode === "poster"
+      ? "请至少勾选 2 张白底图来组合海报（按勾选顺序，第 1 张为主图）。"
+      : "请至少勾选 1 张干净 / 白底商品图。";
+    return;
+  }
+  sceneMode = mode;
+  applySceneMode();
+  $("sceneIntro").textContent = mode === "poster"
+    ? `已选 ${chosen.length} 张（第 1 张「${chosen[0].name}」为主图）。组合成一张海报，可选比例。`
+    : `已选 ${chosen.length} 张参考图${chosen.length > 1 ? `（第 1 张「${chosen[0].name}」为商品主体）` : ""}。AI 会锁定商品特征，重画一张全新的电商场景主图。`;
   $("sceneResult").style.display = "none";
   $("sceneResultImg").src = "";
   $("sceneOpen").style.display = "none";
+  $("sceneOpen").title = "";
+  $("sceneOverlay").style.display = "none";
+  $("sceneOverlay").open = false;
   $("sceneStatus").textContent = "";
+  sceneResultPath = "";
   $("sceneModal").style.display = "flex";
-});
+}
+$("repairScene")?.addEventListener("click", () => openSceneModal("main"));
+$("repairPoster")?.addEventListener("click", () => openSceneModal("poster"));
+
+// 出图成功后统一展示结果并打开「文案/角标」叠加区。
+function showSceneResult(path, statusText) {
+  sceneResultPath = path;
+  window.snapAPI.readThumb(path).then((thumb) => {
+    if (thumb) { $("sceneResultImg").src = thumb; $("sceneResult").style.display = "block"; }
+  });
+  $("sceneOpen").style.display = "inline-flex";
+  $("sceneOpen").title = path;
+  $("sceneOverlay").style.display = "block";
+  if (statusText) $("sceneStatus").textContent = statusText;
+}
 
 function closeScene() { if (!sceneGenerating) $("sceneModal").style.display = "none"; }
 $("sceneClose")?.addEventListener("click", closeScene);
@@ -724,40 +784,96 @@ $("sceneOpen")?.addEventListener("click", async () => {
 $("sceneGenerate")?.addEventListener("click", async () => {
   if (sceneGenerating) return;
   const chosen = repairSelectedOrdered();
-  if (chosen.length < 2) { $("sceneStatus").textContent = "请至少勾选 2 张参考图。"; return; }
+  const min = sceneMode === "poster" ? 2 : 1;
+  if (chosen.length < min) { $("sceneStatus").textContent = `请至少勾选 ${min} 张图。`; return; }
   sceneGenerating = true;
   $("sceneGenerate").disabled = true;
   $("sceneClose").disabled = true;
   $("sceneResult").style.display = "none";
   $("sceneOpen").style.display = "none";
+  $("sceneOpen").title = "";
+  $("sceneOverlay").style.display = "none";
   sceneResultPath = "";
-  // 其实是一次服务器调用（分析+生成在服务端），这里轮播文案给用户阶段反馈。
-  const stages = ["正在分析参考图、锁定商品特征……", "正在重新设计电商场景并生成……", "正在出图，请稍候（约 30-90 秒）……"];
+
+  // 本地拼图：不调 AI、不扣额度，直接合成。
+  if (sceneMode === "poster" && !posterIsAI()) {
+    $("sceneStatus").textContent = "正在本地合成海报……";
+    try {
+      const r = await window.snapAPI.backend("compose_images", {
+        paths: chosen.map((x) => x.path), ratio: $("sceneRatio").value, out_dir: outputDir,
+      });
+      if (!r.ok) { $("sceneStatus").textContent = "合成失败：" + (r.error || "未知错误"); return; }
+      showSceneResult(r.data.path, "已合成：" + r.data.path);
+    } catch (e) {
+      $("sceneStatus").textContent = "合成失败：" + e.message;
+    } finally {
+      sceneGenerating = false;
+      $("sceneGenerate").disabled = false;
+      $("sceneClose").disabled = false;
+    }
+    return;
+  }
+
+  // AI 路径（场景主图 / AI 海报）：服务端分析+生成，这里轮播阶段文案。
+  const stages = ["正在分析参考图、锁定商品特征……", "正在重新设计电商场景并生成……", "正在出图，请稍候（高峰期可能 1-5 分钟）……"];
   let si = 0;
   $("sceneStatus").textContent = stages[0];
   const timer = setInterval(() => { si = Math.min(si + 1, stages.length - 1); $("sceneStatus").textContent = stages[si]; }, 12000);
   try {
     const r = await window.snapAPI.backend("reconstruct_scene", {
       paths: chosen.map((x) => x.path),
-      ratio: $("sceneRatio").value, usage: $("sceneUsage").value,
+      ratio: $("sceneRatio").value,
+      usage: sceneMode === "poster" ? "poster" : "main",
       style: $("sceneStyle").value, strength: $("sceneStrength").value,
       copy_space: $("sceneCopySpace").checked, extra: $("sceneExtra").value.trim(),
       out_dir: outputDir,
     });
     clearInterval(timer);
     if (!r.ok) { $("sceneStatus").textContent = "生成失败：" + (r.error || "未知错误"); return; }
-    sceneResultPath = r.data.path;
-    const thumb = await window.snapAPI.readThumb(sceneResultPath);
-    if (thumb) { $("sceneResultImg").src = thumb; $("sceneResult").style.display = "block"; }
-    $("sceneOpen").style.display = "inline-flex";
-    $("sceneStatus").textContent = "已生成：" + sceneResultPath;
+    showSceneResult(r.data.path, "已生成：" + r.data.path);
   } catch (e) {
     clearInterval(timer);
-    $("sceneStatus").textContent = "生成失败：" + e.message;
+    if (String(e.message || "").includes("请求超时")) {
+      const dir = sceneOutputSubdir();
+      sceneResultPath = outputDir || dir;
+      if (sceneResultPath) {
+        $("sceneOpen").style.display = "inline-flex";
+        $("sceneOpen").title = "打开输出目录";
+      }
+      $("sceneStatus").textContent = dir
+        ? `界面等待超时，但后台可能仍在生成；如果已完成，会保存到：${dir}`
+        : "界面等待超时，但后台可能仍在生成；请稍后到输出目录查看。";
+    } else {
+      $("sceneStatus").textContent = "生成失败：" + e.message;
+    }
   } finally {
     sceneGenerating = false;
     $("sceneGenerate").disabled = false;
     $("sceneClose").disabled = false;
+  }
+});
+
+// 文案 / 角标：在已出图上本地叠加，生成成品图（不调 AI、不扣额度）。
+$("ovApply")?.addEventListener("click", async () => {
+  if (!sceneResultPath || sceneGenerating) return;
+  const copyText = $("ovCopyText").value.trim();
+  const badgeText = $("ovBadgeText").value.trim();
+  if (!copyText && !badgeText) { $("sceneStatus").textContent = "请先填文案或角标文字。"; return; }
+  $("ovApply").disabled = true;
+  $("sceneStatus").textContent = "正在叠加文案 / 角标……";
+  try {
+    const r = await window.snapAPI.backend("overlay_text_badge", {
+      path: sceneResultPath, out_dir: outputDir,
+      copy: { text: copyText, position: $("ovCopyPos").value, size: $("ovCopySize").value,
+              color: $("ovCopyColor").value, stroke: $("ovCopyStroke").checked },
+      badge: { text: badgeText, corner: $("ovBadgeCorner").value, color: $("ovBadgeColor").value },
+    });
+    if (!r.ok) { $("sceneStatus").textContent = "叠加失败：" + (r.error || "未知错误"); return; }
+    showSceneResult(r.data.path, "已出成品图：" + r.data.path);
+  } catch (e) {
+    $("sceneStatus").textContent = "叠加失败：" + e.message;
+  } finally {
+    $("ovApply").disabled = false;
   }
 });
 

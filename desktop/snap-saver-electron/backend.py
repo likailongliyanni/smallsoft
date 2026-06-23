@@ -259,10 +259,26 @@ def cmd_stitch_long_image(args):
     return {"path": str(out), "dir": str(out_dir), "width": width, "height": height}
 
 
+# 海报/主图通用比例 → 宽高比例分量（前端、服务端、本地三处保持一致）。
+COMPOSE_RATIOS = {
+    "1:1": (1, 1), "4:5": (4, 5), "3:4": (3, 4), "16:9": (16, 9),
+    "9:16": (9, 16), "3:2": (3, 2), "2:3": (2, 3), "1:2": (1, 2),
+}
+
+
+def _ratio_canvas(ratio, base=1200):
+    """比例字符串 → 画布 (宽, 高)，长边固定为 base。"""
+    rw, rh = COMPOSE_RATIOS.get(str(ratio or "1:1"), (1, 1))
+    if rw >= rh:
+        return base, max(1, round(base * rh / rw))
+    return max(1, round(base * rw / rh)), base
+
+
 def cmd_compose_images(args):
-    """把多张（白底）图按勾选顺序合成一张「主次海报」组合图。
-    args: {paths:[按勾选顺序，第一个=主图], layout:"hero", size:正方形边长, gap, out_dir, title}
-    主图占左侧大区，其余按顺序排右侧（≤3 张竖列、4+ 张两列网格），等比缩放居中、白底无缝。"""
+    """把多张（白底）图按勾选顺序合成一张「主次海报」组合图，支持比例。
+    args: {paths:[按勾选顺序，第一个=主图], ratio, size:长边像素, gap, out_dir}
+    横版/方版：主图占左侧大区，次图排右侧单列；竖版：主图占上方大区，次图排底部一行。
+    等比缩放居中、白底无缝。"""
     raw = args.get("paths") or []
     images = []
     for item in raw:
@@ -278,9 +294,11 @@ def cmd_compose_images(args):
     if not images:
         raise RuntimeError("没有可合成的图片，请先勾选要合成的白底图。")
 
-    size = int(args.get("size") or 800)
-    gap = int(args.get("gap") or max(12, size // 33))
-    canvas = S.Image.new("RGB", (size, size), "white")
+    base = int(args.get("size") or 1200)
+    ratio = str(args.get("ratio") or "1:1")
+    width, height = _ratio_canvas(ratio, base)
+    gap = int(args.get("gap") or max(12, min(width, height) // 33))
+    canvas = S.Image.new("RGB", (width, height), "white")
 
     def paste_contain(im, box):
         """把 im 等比缩放放进 box=(x,y,w,h) 居中；白底直接贴，透明图按 alpha 贴到白底。"""
@@ -288,8 +306,8 @@ def cmd_compose_images(args):
         if w <= 1 or h <= 1:
             return
         src = im.convert("RGBA") if im.mode in ("RGBA", "LA", "P") else im.convert("RGB")
-        ratio = min(w / src.width, h / src.height)
-        nw, nh = max(1, round(src.width * ratio)), max(1, round(src.height * ratio))
+        scale = min(w / src.width, h / src.height)
+        nw, nh = max(1, round(src.width * scale)), max(1, round(src.height * scale))
         resized = src.resize((nw, nh), S.Image.LANCZOS)
         ox, oy = x + (w - nw) // 2, y + (h - nh) // 2
         if resized.mode == "RGBA":
@@ -298,31 +316,159 @@ def cmd_compose_images(args):
             canvas.paste(resized, (ox, oy))
 
     if len(images) == 1:
-        paste_contain(images[0], (gap, gap, size - 2 * gap, size - 2 * gap))
+        paste_contain(images[0], (gap, gap, width - 2 * gap, height - 2 * gap))
     else:
         main, secs = images[0], images[1:]
         n = len(secs)
-        # 主图：左侧居中大方块（明显比小图大，体现主次）
-        main_side = round(size * 0.60)
-        paste_contain(main, (gap, (size - main_side) // 2, main_side, main_side))
-        # 其余：右侧单列等距方块，整体竖向居中（比 2×2 网格紧凑、无空洞）
-        right_x = gap + main_side + gap
-        right_w = size - right_x - gap
-        right_h = size - 2 * gap
-        sec_side = max(1.0, min(right_w, (right_h - (n - 1) * gap) / n))
-        stack_h = n * sec_side + (n - 1) * gap
-        start_y = gap + (right_h - stack_h) / 2
-        for i, sec in enumerate(secs):
-            cx = round(right_x + (right_w - sec_side) / 2)
-            cy = round(start_y + i * (sec_side + gap))
-            paste_contain(sec, (cx, cy, round(sec_side), round(sec_side)))
+        if width >= height:
+            # 横版/方版：主图左侧大块，次图右侧竖排
+            main_w = round(width * 0.60)
+            paste_contain(main, (gap, gap, main_w - 2 * gap, height - 2 * gap))
+            strip_x = main_w + gap
+            strip_w = width - strip_x - gap
+            cell = max(1.0, min(strip_w, (height - 2 * gap - (n - 1) * gap) / n))
+            start = gap + (height - 2 * gap - (n * cell + (n - 1) * gap)) / 2
+            for i, sec in enumerate(secs):
+                cx = round(strip_x + (strip_w - cell) / 2)
+                cy = round(start + i * (cell + gap))
+                paste_contain(sec, (cx, cy, round(cell), round(cell)))
+        else:
+            # 竖版：主图上方大块，次图底部横排
+            main_h = round(height * 0.62)
+            paste_contain(main, (gap, gap, width - 2 * gap, main_h - 2 * gap))
+            strip_y = main_h + gap
+            strip_h = height - strip_y - gap
+            cell = max(1.0, min(strip_h, (width - 2 * gap - (n - 1) * gap) / n))
+            start = gap + (width - 2 * gap - (n * cell + (n - 1) * gap)) / 2
+            for i, sec in enumerate(secs):
+                cx = round(start + i * (cell + gap))
+                cy = round(strip_y + (strip_h - cell) / 2)
+                paste_contain(sec, (cx, cy, round(cell), round(cell)))
 
     out_dir = _configured_output_dir(args.get("out_dir")) / "组合图"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = S.time.strftime("%Y%m%d-%H%M%S")
     out = out_dir / f"组合图_{stamp}.png"
     canvas.save(out, "PNG", optimize=True)
-    return {"path": str(out.resolve()), "dir": str(out_dir.resolve()), "count": len(images), "size": size}
+    return {"path": str(out.resolve()), "dir": str(out_dir.resolve()),
+            "count": len(images), "ratio": ratio, "size": [width, height]}
+
+
+def _parse_color(value, default=(255, 255, 255)):
+    """#rgb / #rrggbb / 已是元组 → (r,g,b)。解析失败返回 default。"""
+    if isinstance(value, (tuple, list)) and len(value) >= 3:
+        return tuple(int(c) for c in value[:3])
+    text = str(value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if len(text) == 6:
+        try:
+            return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            pass
+    return default
+
+
+def _contrast_color(rgb):
+    """按亮度给文字配描边：亮字配深描边，深字配浅描边，保证任何背景上都看得清。"""
+    luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+    return (0, 0, 0) if luma > 140 else (255, 255, 255)
+
+
+def _wrap_lines(draw, text, font, max_w):
+    """按最大宽度折行：先按用户换行，再对每段中英文混排贪心折行。"""
+    lines = []
+    for raw_line in str(text).replace("\r", "").split("\n"):
+        if raw_line == "":
+            lines.append("")
+            continue
+        cur = ""
+        for ch in raw_line:
+            trial = cur + ch
+            if draw.textlength(trial, font=font) <= max_w or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = ch
+        if cur:
+            lines.append(cur)
+    return lines
+
+
+def cmd_overlay_text_badge(args):
+    """在一张成品图上本地叠加「文案」和「角标」（不调 AI、不扣额度）。
+    args: {
+      path, out_dir,
+      copy:  {text, position:top|center|bottom, size:large|medium|small, color, stroke},
+      badge: {text, corner:tl|tr|bl|br, color}
+    }
+    AI/拼图只负责出干净的图，文字一律本地绘制，保证清晰、可改、不糊。"""
+    src_path = Path(args.get("path") or "")
+    if not src_path.exists():
+        raise RuntimeError("找不到要叠加文字的图片。")
+
+    base = S.Image.open(src_path)
+    base.load()
+    base = base.convert("RGBA")
+    W, H = base.size
+    layer = S.Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = S.ImageDraw.Draw(layer)
+
+    copy = args.get("copy") or {}
+    copy_text = str(copy.get("text") or "").strip()
+    if copy_text:
+        size_factor = {"large": 0.090, "medium": 0.062, "small": 0.044}.get(
+            str(copy.get("size") or "medium"), 0.062)
+        font = S._doc_font(max(14, round(W * size_factor)), bold=True)
+        max_w = round(W * 0.88)
+        lines = _wrap_lines(draw, copy_text, font, max_w)
+        ascent, descent = font.getmetrics()
+        line_h = ascent + descent
+        line_gap = round(line_h * 0.22)
+        block_h = len(lines) * line_h + (len(lines) - 1) * line_gap
+        margin = round(H * 0.06)
+        position = str(copy.get("position") or "bottom")
+        if position == "top":
+            y = margin
+        elif position == "center":
+            y = (H - block_h) // 2
+        else:
+            y = H - block_h - margin
+        color = _parse_color(copy.get("color"), (255, 255, 255))
+        stroke_w = max(2, round(line_h * 0.07)) if copy.get("stroke", True) else 0
+        stroke_fill = _contrast_color(color)
+        for line in lines:
+            lw = draw.textlength(line, font=font)
+            lx = (W - lw) // 2
+            draw.text((lx, y), line, font=font, fill=color + (255,),
+                      stroke_width=stroke_w, stroke_fill=stroke_fill + (255,))
+            y += line_h + line_gap
+
+    badge = args.get("badge") or {}
+    badge_text = str(badge.get("text") or "").strip()
+    if badge_text:
+        bfont = S._doc_font(max(14, round(W * 0.045)), bold=True)
+        tw = draw.textlength(badge_text, font=bfont)
+        ascent, descent = bfont.getmetrics()
+        th = ascent + descent
+        pad_x, pad_y = round(th * 0.5), round(th * 0.28)
+        bw, bh = round(tw + 2 * pad_x), round(th + 2 * pad_y)
+        margin = round(min(W, H) * 0.035)
+        corner = str(badge.get("corner") or "tr")
+        bx = margin if corner in ("tl", "bl") else W - margin - bw
+        by = margin if corner in ("tl", "tr") else H - margin - bh
+        fill = _parse_color(badge.get("color"), (226, 51, 51))
+        radius = max(6, round(bh * 0.28))
+        draw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=radius, fill=fill + (235,))
+        draw.text((bx + pad_x, by + pad_y), badge_text, font=bfont, fill=(255, 255, 255, 255))
+
+    result = S.Image.alpha_composite(base, layer).convert("RGB")
+    out_dir = _configured_output_dir(args.get("out_dir")) / "成品图"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = S.time.strftime("%Y%m%d-%H%M%S")
+    out = out_dir / f"成品_{stamp}.png"
+    result.save(out, "PNG", optimize=True)
+    return {"path": str(out.resolve()), "dir": str(out_dir.resolve())}
 
 
 def _server_upload_multi(path, image_paths, fields, timeout=600):
@@ -388,7 +534,7 @@ def cmd_reconstruct_scene(args):
         # 复用 detect 的预处理：压到 1024px JPEG，省流量、提速。
         prepared = [S.prepare_detect_input(p, Path(tmp)) for p in paths]
         png_bytes = _server_upload_multi(
-            "/api/desktop/scene/reconstruct", prepared, fields, timeout=600)
+            "/api/desktop/scene/reconstruct", prepared, fields, timeout=900)
     if not png_bytes:
         raise RuntimeError("生成结果为空。")
 
@@ -1121,6 +1267,7 @@ HANDLERS = {
     "export_doc": cmd_export_doc,
     "stitch_long_image": cmd_stitch_long_image,
     "compose_images": cmd_compose_images,
+    "overlay_text_badge": cmd_overlay_text_badge,
     "reconstruct_scene": cmd_reconstruct_scene,
     "open_path": cmd_open_path,
     "repair_modes": cmd_repair_modes,

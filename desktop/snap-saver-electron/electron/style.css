@@ -237,6 +237,28 @@ select {
 .scene-result { margin-top: 16px; text-align: center; }
 .scene-result img { max-width: 100%; max-height: 360px; border-radius: 10px; border: 1px solid var(--border); }
 
+/* 模式切换（场景主图 / 组合海报） */
+.scene-modes { display: inline-flex; gap: 4px; padding: 4px; background: var(--bg-soft, #f1f5f4); border-radius: 10px; margin-bottom: 14px; }
+.scene-mode-btn { border: none; background: transparent; padding: 7px 16px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.scene-mode-btn.active { background: var(--green, #079a48); color: #fff; }
+.scene-tip { font-size: 12.5px; color: var(--muted); margin: -4px 0 14px; line-height: 1.6; padding: 8px 12px; background: rgba(7,154,72,.07); border-radius: 8px; }
+.scene-tip strong { color: var(--green-dark, #057a39); }
+.scene-field input[type="text"], .scene-field input[type="color"] {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px;
+  background: var(--bg, #fff); color: var(--text); font-family: inherit;
+}
+.scene-field input[type="color"] { padding: 4px; height: 38px; cursor: pointer; }
+.scene-field input[type="text"]:focus { border-color: var(--green); outline: none; box-shadow: 0 0 0 3px rgba(7,154,72,.12); }
+
+/* 文案 / 角标 叠加区 */
+.scene-overlay { margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; padding: 4px 14px; }
+.scene-overlay > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text); padding: 10px 0; list-style: none; }
+.scene-overlay > summary::-webkit-details-marker { display: none; }
+.scene-overlay > summary::before { content: "＋ "; color: var(--green); }
+.scene-overlay[open] > summary::before { content: "－ "; }
+.scene-overlay-body { padding: 6px 0 14px; display: flex; flex-direction: column; gap: 12px; }
+.scene-overlay-apply { align-self: end; }
+
 /* ── 所见即所得文档编辑器 ── */
 .doc-editor-modal { width: 96vw; max-width: 1180px; height: 94vh; }
 .doc-editor-modal.doc-maximized { width: 100vw; max-width: none; height: 100vh; border-radius: 0; }
