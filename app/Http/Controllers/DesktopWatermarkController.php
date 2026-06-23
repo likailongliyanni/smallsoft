@@ -6,6 +6,7 @@ use App\Models\QuotaLog;
 use App\Models\User;
 use App\Services\ImageDescribeService;
 use App\Services\ProductParamsService;
+use App\Services\SceneReconstructService;
 use App\Services\TokenService;
 use App\Services\WatermarkAiService;
 use Illuminate\Support\Facades\DB;
@@ -106,6 +107,52 @@ class DesktopWatermarkController extends Controller
         }
     }
 
+    /**
+     * AI 商品主视觉 / 电商场景重构：多张参考图 → 视觉分析锁定商品 → 重新生成一张全新电商图。
+     * 扣 1 张生成额度（与图片修复同口径）。
+     */
+    public function reconstructScene(Request $request, TokenService $tokens, SceneReconstructService $service)
+    {
+        @set_time_limit(600);
+
+        $user = $tokens->userFromRequest($request);
+        abort_if(! $user, 401, '请先登记软件编号');
+        abort_if($user->availableGenerations() <= 0, 402, '生成额度不足，请把软件编号发给客服充值。');
+
+        $data = $request->validate([
+            'images' => ['required', 'array', 'min:1', 'max:6'],
+            'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
+            'ratio' => ['nullable', 'string', 'in:1:1,4:5,3:4,16:9'],
+            'usage' => ['nullable', 'string', 'in:main,detail_header,scene,poster'],
+            'style' => ['nullable', 'string', 'in:auto,studio,lifestyle,premium,fresh'],
+            'strength' => ['nullable', 'string', 'in:standard,high'],
+            'copy_space' => ['nullable'],
+            'extra' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $options = [
+            'ratio' => $data['ratio'] ?? '1:1',
+            'usage' => $data['usage'] ?? 'main',
+            'style' => $data['style'] ?? 'auto',
+            'strength' => $data['strength'] ?? 'standard',
+            'copy_space' => filter_var($data['copy_space'] ?? false, FILTER_VALIDATE_BOOLEAN),
+            'extra' => (string) ($data['extra'] ?? ''),
+        ];
+
+        try {
+            $result = $service->generate(array_values($request->file('images')), $options);
+            $remaining = $this->consumeSceneQuota($user);
+
+            return response($result['image'], 200, [
+                'Content-Type' => 'image/png',
+                'Cache-Control' => 'no-store',
+                'X-Remaining-Quota' => (string) $remaining,
+            ]);
+        } catch (Throwable $e) {
+            abort(422, $e->getMessage());
+        }
+    }
+
     /** 一句话商品介绍 → 可编辑的商品参数表。 */
     public function generateParams(Request $request, TokenService $tokens, ProductParamsService $service): array
     {
@@ -146,6 +193,29 @@ class DesktopWatermarkController extends Controller
                 'change_value' => $charge ? -1 : 0,
                 'source' => 'snap_saver_doc_describe',
                 'note' => $charge ? '智能截图软件 AI 图片描述扣除 1 次额度' : '智能截图软件 AI 图片描述（免费期，仅记录）',
+            ]);
+
+            return $fresh->fresh()->availableGenerations();
+        });
+    }
+
+    private function consumeSceneQuota(User $user): int
+    {
+        return DB::transaction(function () use ($user): int {
+            $fresh = User::query()->lockForUpdate()->findOrFail($user->id);
+            if ($fresh->free_generations > 0) {
+                $fresh->decrement('free_generations');
+            } elseif ($fresh->paid_generations > 0) {
+                $fresh->decrement('paid_generations');
+            } else {
+                throw new RuntimeException('生成额度不足，请把软件编号发给客服充值。');
+            }
+
+            QuotaLog::create([
+                'user_id' => $fresh->id,
+                'change_value' => -1,
+                'source' => 'snap_saver_scene_reconstruct',
+                'note' => '智能截图软件 AI 商品主视觉扣除 1 张额度',
             ]);
 
             return $fresh->fresh()->availableGenerations();

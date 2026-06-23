@@ -220,6 +220,23 @@ select {
 }
 .doc-empty { text-align: center; color: var(--hint); font-size: 13px; padding: 40px 0; }
 
+/* ── AI 商品主视觉 弹窗 ── */
+.scene-intro { font-size: 13px; color: var(--muted); margin: 0 0 14px; line-height: 1.6; }
+.scene-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.scene-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text); }
+.scene-field > span { font-weight: 500; color: var(--muted); }
+.scene-field select, .scene-field textarea {
+  width: 100%; box-sizing: border-box; font-family: inherit; font-size: 13px;
+  padding: 7px 9px; border: 1px solid var(--border-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text);
+}
+.scene-field textarea { resize: vertical; min-height: 44px; }
+.scene-field textarea:focus, .scene-field select:focus { border-color: var(--green); outline: none; box-shadow: 0 0 0 3px rgba(7,154,72,.12); }
+.scene-extra { margin-top: 12px; }
+.scene-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin: 13px 0 0; cursor: pointer; }
+.scene-result { margin-top: 16px; text-align: center; }
+.scene-result img { max-width: 100%; max-height: 360px; border-radius: 10px; border: 1px solid var(--border); }
+
 /* ── 所见即所得文档编辑器 ── */
 .doc-editor-modal { width: 96vw; max-width: 1180px; height: 94vh; }
 .doc-editor-modal.doc-maximized { width: 100vw; max-width: none; height: 100vh; border-radius: 0; }
@@ -264,22 +281,30 @@ select {
 .doc-editor .ql-editor h2 { margin: 28px 0 12px; color: #111; }
 .doc-editor .ql-editor p { margin: 0 0 12px; }
 .doc-editor .ql-editor img {
-  display: block; width: auto; max-width: 100%; max-height: 720px; margin: 22px auto 12px;
+  display: block; width: auto; max-width: 100%; max-height: 720px; margin: 22px 0 12px;
   border-radius: 0; object-fit: contain; cursor: pointer; box-sizing: border-box;
-  transition: box-shadow .15s, transform .15s;
+  transition: filter .15s, opacity .15s;
 }
 .doc-editor .ql-editor img.selling-point-image { padding: 12px; background: #fff; border: 0; }
-.doc-editor .ql-editor img:hover { box-shadow: 0 0 0 3px rgba(7,154,72,.14); }
-.doc-editor .ql-editor img.doc-image-selected { box-shadow: 0 0 0 3px var(--green); }
-.doc-image-resizer {
-  position: fixed; display: none; border: 2px solid var(--green); z-index: 10020;
-  pointer-events: none; box-sizing: border-box;
+/* 被标记「不导出」的图：变灰 + 半透明，导出时整段删除（不给整图加大框） */
+.doc-editor .ql-editor img.doc-image-excluded { filter: grayscale(1); opacity: .42; }
+
+/* 图片左上角「导出开关」徽章：做在包裹图片的 <p> 上（伪元素无法渲染在 img 替换元素本身）。
+   贴图片左上角内侧，纯展示；点击切换由 JS 判定（判定区放大覆盖整个徽章，绝不漏点）。
+   纯 CSS 跟着图片走，绝不飘；导出模板不含这些规则，徽章不会进成品。 */
+.doc-editor .ql-editor p:has(> img) { position: relative; }
+.doc-editor .ql-editor p:has(> img)::before {
+  content: "✓ 导出"; position: absolute; top: 22px; left: 0; z-index: 6;
+  padding: 4px 10px; font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap;
+  background: var(--green); border-radius: 0 0 9px 0;
+  box-shadow: 0 2px 7px rgba(0,0,0,.3); pointer-events: none;
 }
-.doc-image-resizer.is-visible { display: block; }
-.doc-image-resizer-handle {
-  position: absolute; right: -8px; bottom: -8px; width: 15px; height: 15px;
-  border: 2px solid #fff; border-radius: 50%; background: var(--green);
-  box-shadow: 0 1px 5px rgba(0,0,0,.25); cursor: nwse-resize; pointer-events: auto;
+.doc-editor .ql-editor p:has(> img.doc-image-excluded)::before {
+  content: "✕ 不导出"; background: #d23b3b;
+}
+/* 选中（AI 描述对象）：仅给徽章加白描边，不再用大框包裹整张图 */
+.doc-editor .ql-editor p:has(> img.doc-image-selected)::before {
+  outline: 2px solid #fff; outline-offset: -2px;
 }
 .product-params-block { margin: 16px 0 24px; }
 .product-params-table { width: 100%; border-collapse: collapse; table-layout: fixed; }

@@ -41,35 +41,47 @@ async function init() {
   }
 }
 
+let outputDirPrompted = false; // 首次使用引导只弹一次
+
+function applyOutputDir(dir) {
+  outputDir = dir;
+  if ($("outputDir")) { $("outputDir").value = dir; $("outputDir").title = dir; }
+}
+
 async function loadOutputSettings() {
   const r = await window.snapAPI.backend("get_settings");
   if (!r.ok || !r.data?.output_dir) {
     if ($("outputDir")) $("outputDir").value = "读取失败";
     return;
   }
-  outputDir = r.data.output_dir;
+  applyOutputDir(r.data.output_dir);
   if ($("repairKeepOriginal")) $("repairKeepOriginal").checked = Boolean(r.data.keep_original);
-  if ($("outputDir")) {
-    $("outputDir").value = outputDir;
-    $("outputDir").title = outputDir;
+  // 首次使用（从没设过存放位置）：主动引导用户选目录，避免截图默默存到找不到的地方。
+  if (!r.data.configured && !outputDirPrompted) {
+    outputDirPrompted = true;
+    await promptFirstRunOutputDir();
   }
 }
 
-$("outputPick")?.addEventListener("click", async () => {
+async function chooseOutputDir(title) {
   const dir = await window.snapAPI.pickFolder({
-    title: "选择截图和文档的输出目录",
+    title: title || "选择截图和成品的存放位置",
     defaultPath: outputDir || undefined,
   });
-  if (!dir) return;
+  if (!dir) return false;
   const r = await window.snapAPI.backend("set_output_dir", { path: dir });
-  if (!r.ok) {
-    alert("设置输出目录失败：" + (r.error || "未知错误"));
-    return;
-  }
-  outputDir = r.data.output_dir;
-  $("outputDir").value = outputDir;
-  $("outputDir").title = outputDir;
-});
+  if (!r.ok) { alert("设置存放位置失败：" + (r.error || "未知错误")); return false; }
+  applyOutputDir(r.data.output_dir);
+  return true;
+}
+
+async function promptFirstRunOutputDir() {
+  // 弹一次系统文件夹选择（标题里说明用途）；取消就用默认并写入配置，下次不再弹。
+  const ok = await chooseOutputDir("首次使用：请选择截图和成品的存放位置（之后可在右上角随时更改）");
+  if (!ok) await window.snapAPI.backend("set_output_dir", { path: outputDir });
+}
+
+$("outputPick")?.addEventListener("click", () => chooseOutputDir("选择截图和成品的存放位置"));
 
 $("outputOpen")?.addEventListener("click", async () => {
   if (!outputDir) await loadOutputSettings();
@@ -114,7 +126,6 @@ let docQuill = null;
 let docSelectedImage = null;
 const docImagePaths = new Map(); // dataURL -> 原图路径
 let productTableRegistered = false;
-let docImageResizer = null;
 
 function registerProductTable() {
   if (productTableRegistered) return;
@@ -155,56 +166,7 @@ function registerProductTable() {
   productTableRegistered = true;
 }
 
-function updateImageResizer() {
-  if (!docImageResizer || !docSelectedImage || !docSelectedImage.isConnected || $("docModal")?.style.display === "none") {
-    docImageResizer?.classList.remove("is-visible");
-    return;
-  }
-  const rect = docSelectedImage.getBoundingClientRect();
-  docImageResizer.style.left = String(rect.left) + "px";
-  docImageResizer.style.top = String(rect.top) + "px";
-  docImageResizer.style.width = String(rect.width) + "px";
-  docImageResizer.style.height = String(rect.height) + "px";
-  docImageResizer.classList.add("is-visible");
-}
-
-function ensureImageResizer() {
-  if (docImageResizer) return;
-  docImageResizer = document.createElement("div");
-  docImageResizer.className = "doc-image-resizer";
-  const handle = document.createElement("span");
-  handle.className = "doc-image-resizer-handle";
-  handle.title = "拖动调整图片大小";
-  docImageResizer.appendChild(handle);
-  document.body.appendChild(docImageResizer);
-  handle.addEventListener("pointerdown", (event) => {
-    if (!docSelectedImage) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const startX = event.clientX;
-    const startWidth = docSelectedImage.getBoundingClientRect().width;
-    const maxWidth = docQuill?.root.clientWidth || startWidth;
-    handle.setPointerCapture?.(event.pointerId);
-    const move = (moveEvent) => {
-      const width = Math.max(120, Math.min(maxWidth, startWidth + moveEvent.clientX - startX));
-      docSelectedImage.style.width = String(Math.round(width)) + "px";
-      docSelectedImage.style.height = "auto";
-      updateImageResizer();
-    };
-    const done = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", done);
-      handle.removeEventListener("pointercancel", done);
-      updateImageResizer();
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", done);
-    handle.addEventListener("pointercancel", done);
-  });
-  $("docModal")?.querySelector(".doc-editor-stage")?.addEventListener("scroll", updateImageResizer, { passive: true });
-  window.addEventListener("resize", updateImageResizer);
-}
-
+// 点击图片只用于「选中」（给 AI 描述用）；勾选「✕ 不导出」用单独的角标 checkbox。
 function selectDocImage(image) {
   document.querySelectorAll("#docEditor img.doc-image-selected").forEach((img) => img.classList.remove("doc-image-selected"));
   docSelectedImage = image || null;
@@ -212,32 +174,43 @@ function selectDocImage(image) {
   const path = image ? docImagePaths.get(image.getAttribute("src")) : "";
   $("docAiSelected").disabled = !path;
   $("docAiSelling").disabled = !path;
-  $("docSelectionHint").textContent = path ? "已选中：" + path.split(/[\\/]/).pop() : "单击编辑器中的图片后可生成 AI 描述";
-  updateImageResizer();
+  $("docSelectionHint").textContent = path ? "已选中：" + path.split(/[\\/]/).pop() : "单击图片可选中并生成 AI 描述；单击图片左上角的勾选框可控制是否导出";
+}
+
+// 点图片左上角区域 = 切换「是否导出」。被排除的图加 .doc-image-excluded（灰罩+角标），
+// 导出时连同其后的说明一起删掉。纯 class 跟着图片走，绝不飘。
+function toggleImageExcluded(image) {
+  if (!image) return;
+  image.classList.toggle("doc-image-excluded");
 }
 
 function ensureDocEditor() {
   if (docQuill) return docQuill;
   if (!window.Quill) throw new Error("文档编辑器加载失败，请重启软件。");
   registerProductTable();
-  ensureImageResizer();
   docQuill = new window.Quill("#docEditor", {
     theme: "snow",
     placeholder: "像网页编辑器一样，从这里直接输入和排版……",
     modules: { toolbar: "#docQuillToolbar" },
   });
-  docQuill.setText("使用说明\n从这里开始编辑正文，或点击上方按钮导入截图。\n");
-  docQuill.formatLine(0, 1, "header", 1);
   docQuill.root.addEventListener("click", (event) => {
     const image = event.target.closest?.("img");
-    selectDocImage(image);
+    if (!image) { selectDocImage(null); return; }
+    // 点图片左上角「✓ 导出 / ✕ 不导出」徽章区 = 切换是否导出；点别处 = 仅选中。
+    // 判定区放大到覆盖整个文字徽章（徽章在图片内 top:0 起、约 70×26），绝不漏点。
+    const r = image.getBoundingClientRect();
+    const x = event.clientX - r.left;
+    const y = event.clientY - r.top;
+    if (x >= -6 && x <= 96 && y >= -6 && y <= 48) {
+      toggleImageExcluded(image);
+    }
+    selectDocImage(image); // 任意点击都选中（仅徽章描边，不出大框），便于 AI 描述
   });
   docQuill.root.addEventListener("dblclick", (event) => {
     const image = event.target.closest?.("img");
     const path = image ? docImagePaths.get(image.getAttribute("src")) : "";
     if (path) window.snapAPI.openExternalPath(path);
   });
-  docQuill.on("text-change", () => setTimeout(updateImageResizer));
   return docQuill;
 }
 
@@ -247,22 +220,27 @@ function openDoc() {
 }
 function closeDoc() {
   $("docModal").style.display = "none";
-  docImageResizer?.classList.remove("is-visible");
 }
 $("docBtn")?.addEventListener("click", openDoc);
 $("docClose")?.addEventListener("click", closeDoc);
 $("docMaximize")?.addEventListener("click", () => {
   const m = document.querySelector("#docModal .doc-editor-modal");
-  if (m) {
-    m.classList.toggle("doc-maximized");
-    setTimeout(updateImageResizer);
-  }
+  if (m) m.classList.toggle("doc-maximized");
 });
 $("docModal")?.addEventListener("click", (event) => { if (event.target.id === "docModal") closeDoc(); });
 
 async function insertDocImage(item, atEnd = false, sellingPoint = false) {
   const editor = ensureDocEditor();
-  const source = item.thumb || await window.snapAPI.readThumb(item.path);
+  // 编辑器里显示 800px 缩略图（小、快，避免大图 base64 撑爆 DOM 卡死）。
+  // 原图路径单独记在 docImagePaths，导出时再换回高清原图。
+  let source = "";
+  if (item.path) {
+    try {
+      const t = await window.snapAPI.backend("make_thumb", { path: item.path, max_width: 800 });
+      if (t.ok && t.data?.thumb) source = t.data.thumb;
+    } catch {}
+  }
+  if (!source) source = item.thumb || await window.snapAPI.readThumb(item.path);
   if (!source) return false;
   docImagePaths.set(source, item.path);
   // atEnd=true（批量导入）：每张都追加到文档末尾，保证「图→说明→图→说明」严格交替，
@@ -465,13 +443,11 @@ $("productInsertTable")?.addEventListener("click", () => {
 
 $("docClear")?.addEventListener("click", () => {
   if (!docQuill || !confirm("确定清空当前文档并新建空白文档吗？")) return;
-  docQuill.setText("使用说明\n");
-  docQuill.formatLine(0, 1, "header", 1);
+  docQuill.setText("\n"); // 真正空白，靠 placeholder 提示，不再残留「使用说明」
   docImagePaths.clear();
   docSelectedImage = null;
   $("docAiSelected").disabled = true;
   $("docAiSelling").disabled = true;
-  updateImageResizer();
   $("docStatus").textContent = "已新建空白文档。";
 });
 
@@ -491,9 +467,40 @@ async function docExport(format) {
   $("docStatus").textContent = format === "pdf"
     ? "正在生成 A4 PDF……"
     : format === "segments" ? "正在按内容块生成分段图……" : "正在生成长图……";
-  const title = editor.getText().split("\n").find((line) => line.trim())?.trim() || "使用说明";
+  const title = editor.getText().split("\n").find((line) => line.trim())?.trim() || "详情页";
+
+  // 导出前：在 HTML 副本上操作，不动编辑器本身（编辑器继续用缩略图保持流畅）。
+  const exportRoot = editor.root.cloneNode(true);
+
+  // ① 删掉用户「取消勾选 / 标记不导出」的图：连同图所在段、以及紧随其后的说明段一起移除。
+  exportRoot.querySelectorAll("img.doc-image-excluded").forEach((img) => {
+    const block = img.closest("p, div, li") || img;
+    const next = block.nextElementSibling; // 图后面那段说明
+    if (next && /^(blockquote|p)$/i.test(next.tagName) && !next.querySelector("img")) next.remove();
+    block.remove();
+  });
+
+  // ② 删掉用户没填的占位说明（如「在这里输入图片说明……」），避免原样印进成品。
+  const placeholders = ["在这里输入图片说明……", "在这里输入商品卖点……", "在这里输入图片说明…", "在这里输入商品卖点…"];
+  exportRoot.querySelectorAll("blockquote, p").forEach((el) => {
+    if (el.querySelector("img")) return;
+    if (placeholders.includes(el.textContent.trim())) el.remove();
+  });
+
+  // ③ 把剩下的「800px 缩略图」换回「原图高清」，保证成品清晰。
+  const imgs = Array.from(exportRoot.querySelectorAll("img"));
+  for (const img of imgs) {
+    const thumbSrc = img.getAttribute("src");
+    const fullPath = docImagePaths.get(thumbSrc);
+    if (!fullPath) continue;
+    try {
+      const r = await window.snapAPI.backend("read_full_image", { path: fullPath });
+      if (r.ok && r.data?.data) img.setAttribute("src", r.data.data);
+    } catch {}
+  }
+
   const result = await window.snapAPI.exportRichDoc({
-    html: editor.root.innerHTML,
+    html: exportRoot.innerHTML,
     title,
     format,
     orientation: $("docOrientation").value,
@@ -519,13 +526,29 @@ $("importBtn")?.addEventListener("click", async () => {
 });
 
 // ───────────────────────── AI 智能修复（选文件夹 + 勾选 + 批量）─────────────────────────
-let repairImgs = [];      // [{path, name, thumb, sel, status}]
+let repairImgs = [];      // [{path, name, thumb, sel, order, status}]
 let repairOutDir = "";
 let repairOutputs = [];
 let repairSourceDir = "";
 let repairRefreshTimer = null;
 let repairRefreshBusy = false;
 let repairRunning = false;
+
+// 勾选顺序：order=0 未选；>0 是第几个勾选的（合成组合图时第 1 个=主图）。sel 与 order>0 保持一致。
+function maxRepairOrder() {
+  return repairImgs.reduce((m, x) => Math.max(m, x.order || 0), 0);
+}
+function renumberRepairOrders() {
+  repairImgs.filter((x) => x.order > 0).sort((a, b) => a.order - b.order)
+    .forEach((x, i) => { x.order = i + 1; });
+}
+function toggleRepairSel(im) {
+  if (im.order > 0) { im.order = 0; im.sel = false; renumberRepairOrders(); }
+  else { im.order = maxRepairOrder() + 1; im.sel = true; }
+}
+function repairSelectedOrdered() {
+  return repairImgs.filter((x) => x.order > 0).sort((a, b) => a.order - b.order);
+}
 
 function stopRepairAutoRefresh() {
   if (repairRefreshTimer) clearTimeout(repairRefreshTimer);
@@ -566,11 +589,13 @@ async function refreshRepairFolder(initial = false) {
         path: meta.path, name: meta.name, thumb,
         mtime_ns: meta.mtime_ns, size: meta.size,
         sel: old && !fingerprintChanged ? old.sel : false,
+        order: old && !fingerprintChanged ? (old.order || 0) : 0,
         status: old && !fingerprintChanged ? old.status : "",
         error: old && !fingerprintChanged ? old.error : "",
       });
     }
     repairImgs = next;
+    renumberRepairOrders(); // 图片增删后让勾选序号保持连续 1..k
     repairOutDir = repairSourceDir;
     repairOutputs = repairOutputs.filter((path) => next.some((item) => item.path === path));
     $("repairOpen").disabled = !repairSourceDir;
@@ -621,6 +646,7 @@ function renderRepairGrid() {
     ? `共 ${repairImgs.length} 张，选中 ${selCount}${repairSourceDir ? " · 自动刷新" : ""}`
     : (repairSourceDir ? "自动刷新中" : "");
   $("repairRun").disabled = repairRunning || runnableCount === 0;
+  if ($("repairCompose")) $("repairCompose").disabled = repairRunning || selCount < 2;
   if (!has) {
     grid.innerHTML = repairSourceDir
       ? '<div class="doc-empty">当前目录暂无图片；软件正在监控，新增图片后会自动显示。</div>'
@@ -637,10 +663,10 @@ function renderRepairGrid() {
     const errorText = im.status === "fail" && im.error
       ? `<div class="rc-error" title="${escapeHtml(im.error)}">${escapeHtml(im.error)}</div>` : "";
     card.innerHTML = `
-      <div class="rc-check">${im.sel ? "✓" : ""}</div>${statusTag}
+      <div class="rc-check">${im.order ? im.order : ""}</div>${statusTag}
       <img class="rc-img" src="${im.thumb || ""}" alt="" />
       <div class="rc-name">${escapeHtml(im.name)}</div>${errorText}`;
-    card.addEventListener("click", () => { im.sel = !im.sel; renderRepairGrid(); });
+    card.addEventListener("click", () => { toggleRepairSel(im); renderRepairGrid(); });
     grid.appendChild(card);
   });
 }
@@ -667,8 +693,73 @@ $("repairKeepOriginal")?.addEventListener("change", async () => {
   }
 });
 
-$("repairSelAll")?.addEventListener("click", () => { repairImgs.forEach((x) => x.sel = true); renderRepairGrid(); });
-$("repairSelNone")?.addEventListener("click", () => { repairImgs.forEach((x) => x.sel = false); renderRepairGrid(); });
+$("repairSelAll")?.addEventListener("click", () => { repairImgs.forEach((x, i) => { x.sel = true; x.order = i + 1; }); renderRepairGrid(); });
+$("repairSelNone")?.addEventListener("click", () => { repairImgs.forEach((x) => { x.sel = false; x.order = 0; }); renderRepairGrid(); });
+
+// AI 商品主视觉：把勾选的参考图（第 1 张为主体）交给 AI，重新生成一张全新电商图。
+let sceneGenerating = false;
+let sceneResultPath = "";
+
+$("repairCompose")?.addEventListener("click", () => {
+  const chosen = repairSelectedOrdered();
+  if (chosen.length < 2) { $("repairStatus").textContent = "请至少勾选 2 张同一商品的参考图（第 1 张为商品主体）。"; return; }
+  $("sceneIntro").textContent = `已选 ${chosen.length} 张参考图（第 1 张「${chosen[0].name}」为商品主体）。AI 会先分析、锁定商品特征，再重新生成一张全新电商图。`;
+  $("sceneResult").style.display = "none";
+  $("sceneResultImg").src = "";
+  $("sceneOpen").style.display = "none";
+  $("sceneStatus").textContent = "";
+  $("sceneModal").style.display = "flex";
+});
+
+function closeScene() { if (!sceneGenerating) $("sceneModal").style.display = "none"; }
+$("sceneClose")?.addEventListener("click", closeScene);
+$("sceneModal")?.addEventListener("click", (e) => { if (e.target.id === "sceneModal") closeScene(); });
+
+$("sceneOpen")?.addEventListener("click", async () => {
+  if (!sceneResultPath) return;
+  const r = await window.snapAPI.openExternalPath(sceneResultPath);
+  if (!r.ok) $("sceneStatus").textContent = "打开失败：" + (r.error || "");
+});
+
+$("sceneGenerate")?.addEventListener("click", async () => {
+  if (sceneGenerating) return;
+  const chosen = repairSelectedOrdered();
+  if (chosen.length < 2) { $("sceneStatus").textContent = "请至少勾选 2 张参考图。"; return; }
+  sceneGenerating = true;
+  $("sceneGenerate").disabled = true;
+  $("sceneClose").disabled = true;
+  $("sceneResult").style.display = "none";
+  $("sceneOpen").style.display = "none";
+  sceneResultPath = "";
+  // 其实是一次服务器调用（分析+生成在服务端），这里轮播文案给用户阶段反馈。
+  const stages = ["正在分析参考图、锁定商品特征……", "正在重新设计电商场景并生成……", "正在出图，请稍候（约 30-90 秒）……"];
+  let si = 0;
+  $("sceneStatus").textContent = stages[0];
+  const timer = setInterval(() => { si = Math.min(si + 1, stages.length - 1); $("sceneStatus").textContent = stages[si]; }, 12000);
+  try {
+    const r = await window.snapAPI.backend("reconstruct_scene", {
+      paths: chosen.map((x) => x.path),
+      ratio: $("sceneRatio").value, usage: $("sceneUsage").value,
+      style: $("sceneStyle").value, strength: $("sceneStrength").value,
+      copy_space: $("sceneCopySpace").checked, extra: $("sceneExtra").value.trim(),
+      out_dir: outputDir,
+    });
+    clearInterval(timer);
+    if (!r.ok) { $("sceneStatus").textContent = "生成失败：" + (r.error || "未知错误"); return; }
+    sceneResultPath = r.data.path;
+    const thumb = await window.snapAPI.readThumb(sceneResultPath);
+    if (thumb) { $("sceneResultImg").src = thumb; $("sceneResult").style.display = "block"; }
+    $("sceneOpen").style.display = "inline-flex";
+    $("sceneStatus").textContent = "已生成：" + sceneResultPath;
+  } catch (e) {
+    clearInterval(timer);
+    $("sceneStatus").textContent = "生成失败：" + e.message;
+  } finally {
+    sceneGenerating = false;
+    $("sceneGenerate").disabled = false;
+    $("sceneClose").disabled = false;
+  }
+});
 
 $("repairRun")?.addEventListener("click", async () => {
   const targets = repairImgs.filter((x) => x.sel && x.status !== "done");

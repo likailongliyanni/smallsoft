@@ -156,7 +156,70 @@
             <span class="doc-status" id="repairStatus"></span>
             <span class="spacer"></span>
             <button class="btn" id="repairOpen" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开结果</button>
+            <button class="btn" id="repairCompose" disabled title="把勾选的参考图交给 AI，重新生成一张全新的电商商品图（第一张为商品主体）"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>AI 商品主视觉</button>
             <button class="btn btn-primary" id="repairRun" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/></svg>开始修复选中</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI 商品主视觉 模态弹窗 -->
+      <div class="modal-mask" id="sceneModal" style="display:none">
+        <div class="modal" style="max-width:860px; height:auto; max-height:92vh">
+          <div class="modal-head">
+            <div class="modal-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="18" height="18" stroke="currentColor"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>
+              AI 商品主视觉
+            </div>
+            <button class="btn btn-icon" id="sceneClose" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          </div>
+          <div class="modal-body">
+            <p class="scene-intro" id="sceneIntro">把勾选的参考图交给 AI，分析并锁定商品特征后，重新生成一张全新的、像同一次拍摄出来的电商商品图。第 1 张为商品主体。</p>
+            <div class="scene-grid">
+              <label class="scene-field"><span>图片比例</span>
+                <select id="sceneRatio">
+                  <option value="1:1">1:1（电商主图）</option>
+                  <option value="4:5">4:5（竖版）</option>
+                  <option value="3:4">3:4（竖版）</option>
+                  <option value="16:9">16:9（横幅）</option>
+                </select>
+              </label>
+              <label class="scene-field"><span>图片用途</span>
+                <select id="sceneUsage">
+                  <option value="main">商品主图</option>
+                  <option value="detail_header">详情页头图</option>
+                  <option value="scene">使用场景图</option>
+                  <option value="poster">宣传海报</option>
+                </select>
+              </label>
+              <label class="scene-field"><span>场景风格</span>
+                <select id="sceneStyle">
+                  <option value="auto">自动</option>
+                  <option value="studio">纯净棚拍</option>
+                  <option value="lifestyle">生活方式</option>
+                  <option value="premium">高级简约</option>
+                  <option value="fresh">清新自然</option>
+                </select>
+              </label>
+              <label class="scene-field"><span>商品还原强度</span>
+                <select id="sceneStrength">
+                  <option value="standard">标准</option>
+                  <option value="high">高（最大限度还原商品）</option>
+                </select>
+              </label>
+            </div>
+            <label class="scene-check"><input type="checkbox" id="sceneCopySpace" /> 预留文案位置（画面留一块干净负空间，不写字）</label>
+            <label class="scene-field scene-extra"><span>补充要求（可空）</span>
+              <textarea id="sceneExtra" rows="2" placeholder="例如：背景用浅木色桌面、加几颗咖啡豆点缀、整体冷色调……"></textarea>
+            </label>
+            <div class="scene-result" id="sceneResult" style="display:none">
+              <img id="sceneResultImg" alt="生成结果" />
+            </div>
+          </div>
+          <div class="modal-foot">
+            <span class="doc-status" id="sceneStatus"></span>
+            <span class="spacer"></span>
+            <button class="btn" id="sceneOpen" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开结果</button>
+            <button class="btn btn-primary" id="sceneGenerate"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3v4M3 5h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>开始生成</button>
           </div>
         </div>
       </div>

@@ -64,4 +64,13 @@ return [
         'model' => env('ALIYUN_IMAGE_REPAIR_MODEL', env('DASHSCOPE_IMAGE_REPAIR_MODEL', 'wan2.7-image')),
         'size' => env('ALIYUN_IMAGE_REPAIR_SIZE', ''),
     ],
+
+    // AI 商品主视觉 / 电商场景重构（多图参考重新生成电商图）。
+    // model 留空则复用 image_repair 模型；百炼上线更强的多图融合/编辑模型后，
+    // 在后台 ModelConfig(purpose=scene_reconstruct) 或这里改个模型名即可，无需改代码。
+    // size 留空则按用户选的比例自动给（1:1→1024*1024 等）。
+    'scene_reconstruct' => [
+        'model' => env('ALIYUN_SCENE_MODEL', ''),
+        'size' => env('ALIYUN_SCENE_SIZE', ''),
+    ],
 ];

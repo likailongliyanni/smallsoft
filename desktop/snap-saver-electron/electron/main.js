@@ -364,7 +364,7 @@ function richDocumentHtml(editorHtml, orientation, theme = "plain") {
       .document h2 { margin: 30px 0 13px; color: #111; }
       .document h3 { margin: 24px 0 10px; }
       .document p { margin: 0 0 12px; }
-      .document img { display: block; width: auto; max-width: 100%; max-height: 900px; margin: 22px auto 12px; border-radius: 0; object-fit: contain; }
+      .document img { display: block; width: auto; max-width: 100%; max-height: 900px; margin: 22px 0 12px; border-radius: 0; object-fit: contain; }
       .document img.selling-point-image { padding: 12px; background: #fff; border: 0; }
       .document blockquote { margin: 14px 0; padding: 0; border: 0; background: #fff; color: #111; }
       .product-params-block { margin: 16px 0 24px; }

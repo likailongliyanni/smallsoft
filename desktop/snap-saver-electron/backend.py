@@ -56,8 +56,11 @@ def cmd_get_settings(args):
     config = S.load_config() or {}
     return {
         "output_dir": str(output_dir),
+        # configured=False 表示用户从没显式设过存放位置（首次使用），界面据此引导用户选目录。
+        "configured": bool(str(config.get("output_dir") or "").strip()),
         "free_dir": str(output_dir / "自由截图"),
         "repair_dir": str(output_dir / "AI修复"),
+        "scene_dir": str(output_dir / "AI主视觉"),
         "doc_dir": str(output_dir / "文档"),
         "keep_original": bool(config.get("keep_original", False)),
     }
@@ -254,6 +257,147 @@ def cmd_stitch_long_image(args):
     out = out_dir / f"{title}_{stamp}.png"
     canvas.save(out, "PNG", optimize=True)
     return {"path": str(out), "dir": str(out_dir), "width": width, "height": height}
+
+
+def cmd_compose_images(args):
+    """把多张（白底）图按勾选顺序合成一张「主次海报」组合图。
+    args: {paths:[按勾选顺序，第一个=主图], layout:"hero", size:正方形边长, gap, out_dir, title}
+    主图占左侧大区，其余按顺序排右侧（≤3 张竖列、4+ 张两列网格），等比缩放居中、白底无缝。"""
+    raw = args.get("paths") or []
+    images = []
+    for item in raw:
+        p = Path(item)
+        if not p.exists():
+            continue
+        try:
+            im = S.Image.open(p)
+            im.load()
+            images.append(im)
+        except Exception:
+            continue
+    if not images:
+        raise RuntimeError("没有可合成的图片，请先勾选要合成的白底图。")
+
+    size = int(args.get("size") or 800)
+    gap = int(args.get("gap") or max(12, size // 33))
+    canvas = S.Image.new("RGB", (size, size), "white")
+
+    def paste_contain(im, box):
+        """把 im 等比缩放放进 box=(x,y,w,h) 居中；白底直接贴，透明图按 alpha 贴到白底。"""
+        x, y, w, h = box
+        if w <= 1 or h <= 1:
+            return
+        src = im.convert("RGBA") if im.mode in ("RGBA", "LA", "P") else im.convert("RGB")
+        ratio = min(w / src.width, h / src.height)
+        nw, nh = max(1, round(src.width * ratio)), max(1, round(src.height * ratio))
+        resized = src.resize((nw, nh), S.Image.LANCZOS)
+        ox, oy = x + (w - nw) // 2, y + (h - nh) // 2
+        if resized.mode == "RGBA":
+            canvas.paste(resized, (ox, oy), resized)
+        else:
+            canvas.paste(resized, (ox, oy))
+
+    if len(images) == 1:
+        paste_contain(images[0], (gap, gap, size - 2 * gap, size - 2 * gap))
+    else:
+        main, secs = images[0], images[1:]
+        n = len(secs)
+        # 主图：左侧居中大方块（明显比小图大，体现主次）
+        main_side = round(size * 0.60)
+        paste_contain(main, (gap, (size - main_side) // 2, main_side, main_side))
+        # 其余：右侧单列等距方块，整体竖向居中（比 2×2 网格紧凑、无空洞）
+        right_x = gap + main_side + gap
+        right_w = size - right_x - gap
+        right_h = size - 2 * gap
+        sec_side = max(1.0, min(right_w, (right_h - (n - 1) * gap) / n))
+        stack_h = n * sec_side + (n - 1) * gap
+        start_y = gap + (right_h - stack_h) / 2
+        for i, sec in enumerate(secs):
+            cx = round(right_x + (right_w - sec_side) / 2)
+            cy = round(start_y + i * (sec_side + gap))
+            paste_contain(sec, (cx, cy, round(sec_side), round(sec_side)))
+
+    out_dir = _configured_output_dir(args.get("out_dir")) / "组合图"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = S.time.strftime("%Y%m%d-%H%M%S")
+    out = out_dir / f"组合图_{stamp}.png"
+    canvas.save(out, "PNG", optimize=True)
+    return {"path": str(out.resolve()), "dir": str(out_dir.resolve()), "count": len(images), "size": size}
+
+
+def _server_upload_multi(path, image_paths, fields, timeout=600):
+    """多文件 multipart 上传到服务器（images[] 数组 + 普通字段），返回响应字节（图片）。
+    复用 snap_saver 的 urllib 鉴权与错误解析；原版 _encode_multipart 只支持单文件，故自己拼。"""
+    import urllib.request
+    import urllib.error
+    token = _STATE.get("token") or ""
+    if not token:
+        raise RuntimeError("请先登记软件编号。")
+    boundary = f"----SnapSaverScene{S.uuid.uuid4().hex}"
+    chunks = []
+    for name, value in fields:
+        chunks.append(
+            (f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+             f"{value}\r\n").encode("utf-8"))
+    for p in image_paths:
+        mime = S.mimetypes.guess_type(p.name)[0] or "image/jpeg"
+        chunks.append(
+            (f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="images[]"; filename="{p.name}"\r\n'
+             f"Content-Type: {mime}\r\n\r\n").encode("utf-8"))
+        chunks.append(p.read_bytes())
+        chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(chunks)
+    request = urllib.request.Request(
+        S.normalize_server_url(_server_url()) + path, data=body, method="POST")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    request.add_header("Accept", "image/png")
+    try:
+        with S._urlopen_safe(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(S._server_error_from_body(raw, f"服务器请求失败：HTTP {exc.code}"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"连接服务器失败：{exc.reason}")
+
+
+def cmd_reconstruct_scene(args):
+    """AI 商品主视觉：多张参考图按勾选顺序上传 → 服务器视觉分析+重新生成 → 存「AI主视觉」目录。
+    args: {paths:[按主次顺序], ratio, usage, style, strength, copy_space, extra, out_dir}"""
+    import tempfile as _tf
+    paths = [p for p in (Path(x) for x in (args.get("paths") or []) if x) if p.exists()]
+    if len(paths) < 1:
+        raise RuntimeError("请至少选择 1 张参考图。")
+    paths = paths[:6]  # 接口最多 6 张
+    _ensure_token()
+
+    fields = [
+        ("ratio", str(args.get("ratio") or "1:1")),
+        ("usage", str(args.get("usage") or "main")),
+        ("style", str(args.get("style") or "auto")),
+        ("strength", str(args.get("strength") or "standard")),
+        ("copy_space", "1" if args.get("copy_space") else "0"),
+        ("extra", str(args.get("extra") or "")),
+    ]
+
+    with _tf.TemporaryDirectory(prefix="snap_scene_") as tmp:
+        # 复用 detect 的预处理：压到 1024px JPEG，省流量、提速。
+        prepared = [S.prepare_detect_input(p, Path(tmp)) for p in paths]
+        png_bytes = _server_upload_multi(
+            "/api/desktop/scene/reconstruct", prepared, fields, timeout=600)
+    if not png_bytes:
+        raise RuntimeError("生成结果为空。")
+
+    out_dir = _configured_output_dir(args.get("out_dir")) / "AI主视觉"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = S.time.strftime("%Y%m%d-%H%M%S")
+    out = out_dir / f"主视觉_{stamp}.png"
+    out.write_bytes(png_bytes)
+    return {"path": str(out.resolve()), "dir": str(out_dir.resolve()), "count": len(paths)}
 
 
 def cmd_open_path(args):
@@ -927,7 +1071,43 @@ def cmd_repair_image(args):
     }
 
 
+def cmd_make_thumb(args):
+    """给原图生成一张缩略图 dataURL（编辑器里显示用，避免大图 base64 撑爆 DOM）。
+    args: {path, max_width}。返回 {thumb, w, h, full_w, full_h}。"""
+    import base64
+    import io as _io
+    p = Path(args.get("path") or "")
+    if not p.exists():
+        raise RuntimeError("图片不存在。")
+    max_w = int(args.get("max_width") or 800)
+    with S.Image.open(p) as im:
+        im = im.convert("RGB")
+        full_w, full_h = im.size
+        if im.width > max_w:
+            h = round(im.height * max_w / im.width)
+            im = im.resize((max_w, h), S.Image.LANCZOS)
+        buf = _io.BytesIO()
+        im.save(buf, "JPEG", quality=82)
+        thumb = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    return {"thumb": thumb, "w": im.width, "h": im.height, "full_w": full_w, "full_h": full_h}
+
+
+def cmd_read_full_image(args):
+    """读原图为高清 dataURL（导出时把编辑器里的缩略图换回原图用）。
+    args: {path}。返回 {data}。"""
+    import base64
+    p = Path(args.get("path") or "")
+    if not p.exists():
+        raise RuntimeError("图片不存在。")
+    ext = p.suffix.lower().lstrip(".")
+    mime = "image/png" if ext == "png" else "image/webp" if ext == "webp" else "image/jpeg"
+    data = "data:" + mime + ";base64," + base64.b64encode(p.read_bytes()).decode()
+    return {"data": data}
+
+
 HANDLERS = {
+    "make_thumb": cmd_make_thumb,
+    "read_full_image": cmd_read_full_image,
     "get_settings": cmd_get_settings,
     "set_output_dir": cmd_set_output_dir,
     "set_keep_original": cmd_set_keep_original,
@@ -940,6 +1120,8 @@ HANDLERS = {
     "generate_product_params": cmd_generate_product_params,
     "export_doc": cmd_export_doc,
     "stitch_long_image": cmd_stitch_long_image,
+    "compose_images": cmd_compose_images,
+    "reconstruct_scene": cmd_reconstruct_scene,
     "open_path": cmd_open_path,
     "repair_modes": cmd_repair_modes,
     "repair_image": cmd_repair_image,

@@ -44,11 +44,12 @@ app.whenReady().then(async () => {
       + "document.getElementById('productInsertTable').click();"
       + "await insertDocImage({ path: 'sample.png', thumb: " + JSON.stringify(transparentPixel) + " }, true, true);"
       + "const image = document.querySelector('#docEditor img');"
-      + "image.click();"
-      + "const handle = document.querySelector('.doc-image-resizer-handle');"
-      + "handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0, pointerId: 1 }));"
-      + "handle.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 200, pointerId: 1 }));"
-      + "handle.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 200, pointerId: 1 }));"
+      + "selectDocImage(image);"
+      + "const selectedOk = image.classList.contains('doc-image-selected');"
+      + "toggleImageExcluded(image);"
+      + "const excludedOn = image.classList.contains('doc-image-excluded');"
+      + "toggleImageExcluded(image);"
+      + "const excludedOff = !image.classList.contains('doc-image-excluded');"
       + "repairSourceDir = 'sample-folder';"
       + "await refreshRepairFolder(true);"
       + "const firstRefreshCount = repairImgs.length;"
@@ -58,10 +59,10 @@ app.whenReady().then(async () => {
       + "modalVisible: document.getElementById('docModal').style.display === 'flex',"
       + "parameterRows: rows.length,"
       + "tableRows: document.querySelectorAll('.product-params-table tr').length,"
-      + "imageWidth: image.style.width,"
       + "imageRadius: getComputedStyle(image).borderRadius,"
       + "sellingPoint: image.classList.contains('selling-point-image'),"
-      + "resizerVisible: document.querySelector('.doc-image-resizer').classList.contains('is-visible'),"
+      + "imageSelectable: selectedOk,"
+      + "excludeToggle: excludedOn && excludedOff,"
       + "segmentButton: Boolean(document.getElementById('docExportSegments')),"
       + "autoRefreshAddsImage: firstRefreshCount === 1 && secondRefreshCount === 2,"
       + "plainTheme: document.getElementById('docTheme').value === 'plain'"
@@ -88,10 +89,10 @@ app.whenReady().then(async () => {
     const passed = result.modalVisible
       && result.parameterRows === 3
       && result.tableRows === 1
-      && parseInt(result.imageWidth, 10) >= 200
       && result.imageRadius === "0px"
       && result.sellingPoint
-      && result.resizerVisible
+      && result.imageSelectable
+      && result.excludeToggle
       && result.segmentButton
       && result.autoRefreshAddsImage
       && result.plainTheme
