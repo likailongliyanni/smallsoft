@@ -1,5 +1,8 @@
 build/
 dist/
+build-backend/
+dist-backend/
+electron/release/
 __pycache__/
 *.bak
 截图存图助手配置.json

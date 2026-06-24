@@ -1,16 +1,52 @@
 {
   "name": "snap-saver-electron",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "智能截图软件 (Electron 界面版)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test:ui": "electron smoke-test.cjs"
+    "test:ui": "electron smoke-test.cjs",
+    "pack:backend": "cd .. && python -m PyInstaller --noconfirm --clean --distpath dist-backend --workpath build-backend snap-saver-backend.spec",
+    "pack:win": "npm run pack:backend && electron-builder --win portable --x64",
+    "dist": "npm run pack:backend && electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "online.haobanfa.snap-saver",
+    "productName": "智能截图软件",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "**/*",
+      "!release/**",
+      "!*.log"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist-backend/backend.exe",
+        "to": "backend/backend.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "智能截图软件"
+    }
   },
   "author": "好办法",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "quill": "2.0.2"

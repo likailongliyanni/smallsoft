@@ -108,7 +108,7 @@ class DesktopWatermarkController extends Controller
     }
 
     /**
-     * AI 商品主视觉 / 电商场景重构：多张参考图 → 视觉分析锁定商品 → 重新生成一张全新电商图。
+     * AI 商品主视觉 / 电商场景重构：单张参考图 → 视觉分析锁定商品 → 重新生成一张全新电商图。
      * 扣 1 张生成额度（与图片修复同口径）。
      */
     public function reconstructScene(Request $request, TokenService $tokens, SceneReconstructService $service)
@@ -120,7 +120,7 @@ class DesktopWatermarkController extends Controller
         abort_if($user->availableGenerations() <= 0, 402, '生成额度不足，请把软件编号发给客服充值。');
 
         $data = $request->validate([
-            'images' => ['required', 'array', 'min:1', 'max:6'],
+            'images' => ['required', 'array', 'min:1', 'max:1'],
             'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
             'ratio' => ['nullable', 'string', 'in:1:1,4:5,3:4,16:9,9:16,3:2,2:3,1:2'],
             'usage' => ['nullable', 'string', 'in:main,detail_header,scene,poster'],

@@ -17,16 +17,16 @@
 
 <section class="launch-strip">
     <div class="launch-copy">
-        <div class="launch-kicker">全新推出 · V1.0</div>
+        <div class="launch-kicker">大版本更新 · V2.0.0</div>
         <h2>智能截图软件</h2>
-        <p>自动打开商品链接，按住 Ctrl 拖动鼠标框选图片，松开即保存。主图和详情图按数量自动切换，全部截完后可选择去水印、去贴纸、去营销广告、图片清爽化或白底上图，再人工勾选图片批量修复。</p>
+        <p>新版改为 Windows 安装包，用户电脑无需安装 npm、Node 或 Python。自动打开商品链接，按住 Ctrl 拖框保存图片；主图/详情自动切换；支持 AI 去水印、去贴纸、去营销广告、白底上图，并新增单图 AI 场景主图、详情页头图、使用场景图和宣传海报。</p>
         <div class="launch-actions">
             <a class="btn" href="/snap-saver">查看功能与下载</a>
             <a class="btn btn-outline" href="/download#snap-saver">直接到下载区</a>
         </div>
     </div>
     <div class="launch-media">
-        <img src="/assets/snap-saver-hero.png" alt="智能截图软件 V1.0 工作流示意图">
+        <img src="/assets/snap-saver-hero.png" alt="智能截图软件 V2.0.0 工作流示意图">
     </div>
 </section>
 

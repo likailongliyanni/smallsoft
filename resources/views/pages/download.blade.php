@@ -19,7 +19,8 @@
             env('COS_REGION', 'ap-guangzhou'),
             rawurlencode($dlFileName)
         );
-        $snapFileName = '智能截图软件_V1.0.zip';
+        $snapVersion = 'V2.0.0';
+        $snapFileName = '智能截图软件_V2.0.0_Setup.exe';
         $cosBase = rtrim((string) env('COS_CDN_URL', ''), '/');
         if ($cosBase !== '') {
             $snapDlUrl = $cosBase.'/downloads/'.rawurlencode($snapFileName);
@@ -38,19 +39,22 @@
         <div class="dl-card-head">
             <div class="dl-ico">▣</div>
             <div class="dl-info">
-                <div class="dl-name">智能截图软件 V1.0</div>
-                <div class="dl-meta">Windows 10/11 64位 · 无需注册 · 默认 50 张图片处理额度 · 支持多种图片修复</div>
+                <div class="dl-name">智能截图软件 {{ $snapVersion }}</div>
+                <div class="dl-meta">Windows 10/11 64位 · 安装包 · 无需 npm/Node/Python · AI 修复 + 单图 AI 场景主图</div>
             </div>
         </div>
         <a class="btn btn-dl" href="{{ $snapDlUrl }}" download="{{ $snapFileName }}">
-            下载智能截图软件 V1.0
+            下载智能截图软件 {{ $snapVersion }}
         </a>
         <div class="dl-tips">
+            <span>新版安装程序</span>
             <span>按住 Ctrl 拖动框选</span>
             <span>主图 / 详情自动切换</span>
             <span>自动打开下一条链接</span>
             <span>AI 去水印 / 去贴纸</span>
-            <span>营销广告清爽化</span>
+            <span>白底上图 / 清爽化</span>
+            <span>单图 AI 场景主图</span>
+            <span>导出 PDF / 长图</span>
             <span>软件编号充值</span>
         </div>
     </div>
@@ -90,18 +94,18 @@
     <div class="step-grid">
         <div class="step">
             <div class="step-num">1</div>
-            <h3>下载并解压</h3>
-            <p>下载 RAR 文件后，右键解压到任意目录（推荐 D盘 / E盘）</p>
+            <h3>下载并安装</h3>
+            <p>智能截图软件下载 Setup 安装包后双击安装；浏览器自动化软件下载 RAR 后解压运行。</p>
         </div>
         <div class="step">
             <div class="step-num">2</div>
             <h3>双击运行</h3>
-            <p>双击「好办法自动化.exe」启动软件，首次会自动下载浏览器组件（约200MB）</p>
+            <p>智能截图软件从桌面快捷方式启动；好办法自动化双击「好办法自动化.exe」启动。</p>
         </div>
         <div class="step">
             <div class="step-num">3</div>
             <h3>开始录制</h3>
-            <p>输入要自动化的网址 → 点开始录制 → 在浏览器正常操作 → 完成 → 整理 → AI 生成脚本</p>
+            <p>截图软件导入商品链接后 Ctrl 拖框采图；自动化软件输入网址后开始录制并生成脚本。</p>
         </div>
     </div>
 </section>

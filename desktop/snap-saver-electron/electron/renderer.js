@@ -646,8 +646,8 @@ function renderRepairGrid() {
     ? `共 ${repairImgs.length} 张，选中 ${selCount}${repairSourceDir ? " · 自动刷新" : ""}`
     : (repairSourceDir ? "自动刷新中" : "");
   $("repairRun").disabled = repairRunning || runnableCount === 0;
-  // 场景主图 1 张起；组合海报至少 2 张（拼图/AI 海报都要多张参考）
-  if ($("repairScene")) $("repairScene").disabled = repairRunning || selCount < 1;
+  // 单图场景主图：只处理 1 张，避免多图组合链路。
+  if ($("repairScene")) $("repairScene").disabled = repairRunning || selCount !== 1;
   if ($("repairPoster")) $("repairPoster").disabled = repairRunning || selCount < 2;
   if (!has) {
     grid.innerHTML = repairSourceDir
@@ -698,7 +698,7 @@ $("repairKeepOriginal")?.addEventListener("change", async () => {
 $("repairSelAll")?.addEventListener("click", () => { repairImgs.forEach((x, i) => { x.sel = true; x.order = i + 1; }); renderRepairGrid(); });
 $("repairSelNone")?.addEventListener("click", () => { repairImgs.forEach((x) => { x.sel = false; x.order = 0; }); renderRepairGrid(); });
 
-// AI 商品主视觉：把勾选的参考图（第 1 张为主体）交给 AI，重新生成一张全新电商图。
+// AI 商品主视觉：单张商品图交给 AI，重新生成一张全新电商图。
 let sceneGenerating = false;
 let sceneResultPath = "";
 let sceneMode = "main";      // "main"=场景主图 | "poster"=组合海报
@@ -734,6 +734,14 @@ $("posterMethod")?.addEventListener("change", applySceneMode);
 
 function openSceneModal(mode) {
   const chosen = repairSelectedOrdered();
+  if (mode === "poster") {
+    $("repairStatus").textContent = "组合海报功能已暂停；请勾选 1 张图生成 AI 场景主图。";
+    return;
+  }
+  if (chosen.length !== 1) {
+    $("repairStatus").textContent = "请只勾选 1 张干净 / 白底商品图来生成 AI 场景主图。";
+    return;
+  }
   const min = mode === "poster" ? 2 : 1;
   if (chosen.length < min) {
     $("repairStatus").textContent = mode === "poster"
@@ -745,7 +753,7 @@ function openSceneModal(mode) {
   applySceneMode();
   $("sceneIntro").textContent = mode === "poster"
     ? `已选 ${chosen.length} 张（第 1 张「${chosen[0].name}」为主图）。组合成一张海报，可选比例。`
-    : `已选 ${chosen.length} 张参考图${chosen.length > 1 ? `（第 1 张「${chosen[0].name}」为商品主体）` : ""}。AI 会锁定商品特征，重画一张全新的电商场景主图。`;
+    : `已选「${chosen[0].name}」。AI 会锁定商品特征，重画一张全新的电商场景主图。`;
   $("sceneResult").style.display = "none";
   $("sceneResultImg").src = "";
   $("sceneOpen").style.display = "none";
@@ -784,6 +792,10 @@ $("sceneOpen")?.addEventListener("click", async () => {
 $("sceneGenerate")?.addEventListener("click", async () => {
   if (sceneGenerating) return;
   const chosen = repairSelectedOrdered();
+  if (sceneMode !== "poster" && chosen.length !== 1) {
+    $("sceneStatus").textContent = "请只勾选 1 张图生成场景主图。";
+    return;
+  }
   const min = sceneMode === "poster" ? 2 : 1;
   if (chosen.length < min) { $("sceneStatus").textContent = `请至少勾选 ${min} 张图。`; return; }
   sceneGenerating = true;
@@ -821,9 +833,9 @@ $("sceneGenerate")?.addEventListener("click", async () => {
   const timer = setInterval(() => { si = Math.min(si + 1, stages.length - 1); $("sceneStatus").textContent = stages[si]; }, 12000);
   try {
     const r = await window.snapAPI.backend("reconstruct_scene", {
-      paths: chosen.map((x) => x.path),
+      paths: [chosen[0].path],
       ratio: $("sceneRatio").value,
-      usage: sceneMode === "poster" ? "poster" : "main",
+      usage: $("sceneUsage").value,
       style: $("sceneStyle").value, strength: $("sceneStrength").value,
       copy_space: $("sceneCopySpace").checked, extra: $("sceneExtra").value.trim(),
       out_dir: outputDir,

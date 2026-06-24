@@ -12,6 +12,7 @@ snap_saver.py 里成熟的函数干活，再把结果以「一行 JSON」从 std
 import json
 import sys
 import io
+import http.client
 from pathlib import Path
 
 # Electron 的管道统一使用 UTF-8。stdin 也必须重设；否则 Windows 中文路径会
@@ -507,18 +508,20 @@ def _server_upload_multi(path, image_paths, fields, timeout=600):
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
         raise RuntimeError(S._server_error_from_body(raw, f"服务器请求失败：HTTP {exc.code}"))
+    except (http.client.RemoteDisconnected, ConnectionResetError) as exc:
+        raise RuntimeError("服务器在生成过程中断开连接，通常是服务端超时或 PHP 进程被中断；请部署最新服务端后重试。") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"连接服务器失败：{exc.reason}")
 
 
 def cmd_reconstruct_scene(args):
-    """AI 商品主视觉：多张参考图按勾选顺序上传 → 服务器视觉分析+重新生成 → 存「AI主视觉」目录。
+    """AI 商品主视觉：单张参考图上传 → 服务器视觉分析+重新生成 → 存「AI主视觉」目录。
     args: {paths:[按主次顺序], ratio, usage, style, strength, copy_space, extra, out_dir}"""
     import tempfile as _tf
     paths = [p for p in (Path(x) for x in (args.get("paths") or []) if x) if p.exists()]
     if len(paths) < 1:
         raise RuntimeError("请至少选择 1 张参考图。")
-    paths = paths[:6]  # 接口最多 6 张
+    paths = paths[:1]  # 单图主图链路：组合/多图功能已暂停
     _ensure_token()
 
     fields = [

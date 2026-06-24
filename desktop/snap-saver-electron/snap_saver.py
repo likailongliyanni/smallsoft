@@ -42,7 +42,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageTk
 
 APP_NAME = "智能截图软件"
 DEFAULT_SERVER_URL = "https://tools.haobanfa.online"
-APP_VERSION = "V1.0"
+APP_VERSION = "V2.0.0"
 
 COLOR_BG = "#f5faf7"
 COLOR_CARD = "#ffffff"

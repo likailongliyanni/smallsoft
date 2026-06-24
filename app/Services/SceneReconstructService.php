@@ -9,12 +9,12 @@ use RuntimeException;
 /**
  * AI 商品主视觉 / 电商场景重构。
  *
- * 用户上传 2-6 张同一商品的参考图，两步生成一张全新的、像同一次拍摄出来的专业电商图：
+ * 用户上传 1 张商品参考图，两步生成一张全新的、像同一次拍摄出来的专业电商图：
  *   第一步 analyze()：视觉模型读全部图 → 结构化 JSON（识别作用、锁定商品特征、定场景方案）。
  *   第二步 render()： 把 JSON + 用户选项拼成最终绘图提示词 → 多图调百炼万相多模态端点 → 出新图。
  *
  * 复用「AI 修复」同一条阿里云 multimodal-generation 端点与 input.messages（图+文）结构，
- * 区别只是 content 里放多张参考图。模型名后台可换（ModelConfig purpose=scene_reconstruct）。
+ * 模型名后台可换（ModelConfig purpose=scene_reconstruct）。
  */
 class SceneReconstructService
 {
@@ -32,7 +32,7 @@ class SceneReconstructService
     /**
      * 端到端生成。
      *
-     * @param  UploadedFile[]  $images  2-6 张参考图
+     * @param  UploadedFile[]  $images  1 张参考图
      * @param  array  $options  ratio/usage/style/strength/copy_space/extra
      * @return array{image: string, analysis: array, prompt: string}  image 为 PNG 字节
      */
@@ -209,7 +209,7 @@ PROMPT;
         return match ($usage) {
             'detail_header' => '电商详情页头图：构图可稍宽、有氛围，承接详情页第一屏。',
             'scene' => '使用场景图：商品自然融入真实使用场景，体现使用方式或效果。',
-            'poster' => '宣传海报：海报式构图，视觉冲击强，预留较多文案空间。',
+            'poster' => '电商宣传海报：围绕参考图中的单个商品重新设计一张完整促销海报，商品为绝对主体，构图有设计感，背景与光影统一，视觉冲击强，预留文案空间；不要添加价格、卖点文字、标签或角标。',
             default => '电商商品主图：商品占画面主体，背景干净，适合平台首图上架。',
         };
     }

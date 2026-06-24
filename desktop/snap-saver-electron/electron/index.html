@@ -156,14 +156,14 @@
             <span class="doc-status" id="repairStatus"></span>
             <span class="spacer"></span>
             <button class="btn" id="repairOpen" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开结果</button>
-            <button class="btn" id="repairScene" disabled title="勾选 1 张或多张干净/白底商品图，AI 生成一张全新的电商场景主图，可加文案和角标"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>AI 场景主图</button>
-            <button class="btn" id="repairPoster" disabled title="把勾选的多张白底图组合成一张海报，可选比例，可加文案和角标"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 13h7v8H3z"/></svg>组合海报</button>
+            <button class="btn" id="repairScene" disabled title="勾选 1 张干净/白底商品图，AI 生成一张全新的电商场景主图，可加文案和角标"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>AI 场景主图</button>
+            <button class="btn" id="repairPoster" disabled style="display:none" title="组合海报功能已暂停"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 13h7v8H3z"/></svg>组合海报</button>
             <button class="btn btn-primary" id="repairRun" disabled><svg viewBox="0 0 24 24" fill="none" stroke-width="2" width="15" height="15" stroke="currentColor"><path d="M5 3l1.5 4L11 8.5 6.5 10 5 14l-1.5-4L-1 8.5 3.5 7z" transform="translate(4 1)"/></svg>开始修复选中</button>
           </div>
         </div>
       </div>
 
-      <!-- AI 出图（场景主图 / 组合海报）模态弹窗 -->
+      <!-- AI 出图（单图场景主图）模态弹窗 -->
       <div class="modal-mask" id="sceneModal" style="display:none">
         <div class="modal" style="max-width:880px; height:auto; max-height:94vh">
           <div class="modal-head">
@@ -176,7 +176,7 @@
           <div class="modal-body">
             <div class="scene-modes" id="sceneModes">
               <button type="button" class="scene-mode-btn active" data-mode="main">场景主图（AI）</button>
-              <button type="button" class="scene-mode-btn" data-mode="poster">组合海报</button>
+              <button type="button" class="scene-mode-btn" data-mode="poster" style="display:none">组合海报</button>
             </div>
             <p class="scene-intro" id="sceneIntro"></p>
             <p class="scene-tip" id="sceneTip">建议用<strong>白底图或干净的图</strong>（主体清晰、背景无杂物），生成的场景主图效果更好。</p>

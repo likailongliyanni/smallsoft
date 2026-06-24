@@ -142,14 +142,20 @@ function handleWindowHoverOverlay(msg) {
 }
 const pending = new Map(); // id -> {resolve, reject}
 
-// 后端脚本在 electron/ 的上一级目录
-const BACKEND = path.join(__dirname, "..", "backend.py");
+// 后端脚本：开发期走 Python 源码；正式安装包走内置 backend.exe。
+const DEV_BACKEND = path.join(__dirname, "..", "backend.py");
+const PACKAGED_BACKEND = path.join(process.resourcesPath, "backend", "backend.exe");
 
 function startBackend() {
-  // 用系统 python（开发期）。打包后会换成内置解释器。
-  const pythonExe = process.platform === "win32" ? "python" : "python3";
-  pyProc = spawn(pythonExe, [BACKEND], {
-    cwd: path.join(__dirname, ".."),
+  const packagedBackendExists = app.isPackaged && fs.existsSync(PACKAGED_BACKEND);
+  const command = packagedBackendExists
+    ? PACKAGED_BACKEND
+    : (process.platform === "win32" ? "python" : "python3");
+  const args = packagedBackendExists ? [] : [DEV_BACKEND];
+  const cwd = packagedBackendExists ? path.dirname(PACKAGED_BACKEND) : path.join(__dirname, "..");
+
+  pyProc = spawn(command, args, {
+    cwd,
     windowsHide: true,
   });
 
