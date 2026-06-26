@@ -43,96 +43,104 @@ REQUIRED_TYPES = [
     "quality_report",
 ]
 
-EXTRA_FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
-    "business_license": [
-        {"key": "legal_representative", "label": "法定代表人", "type": "text"},
-    ],
-    "trademark_certificate": [
-        {"key": "international_class", "label": "国际分类", "type": "text"},
-        {"key": "approved_goods", "label": "核定使用商品/服务", "type": "textarea"},
-        {"key": "registered_address", "label": "注册人地址", "type": "text"},
-    ],
-    "authorization_letter": [
-        {"key": "authorized_party", "label": "被授权方", "type": "text"},
-        {"key": "authorization_project", "label": "授权项目", "type": "text"},
-        {"key": "authorized_products", "label": "授权产品", "type": "textarea"},
-        {"key": "authorization_region", "label": "授权区域", "type": "text"},
-        {"key": "authorization_channel", "label": "授权渠道/用途", "type": "text"},
-        {"key": "allow_sub_authorization", "label": "是否允许转授权", "type": "boolean"},
-    ],
-    "barcode_certificate": [
-        {"key": "member_name", "label": "成员名称", "type": "text"},
-        {"key": "manufacturer_identification_code", "label": "厂商识别代码", "type": "text"},
-        {"key": "gln", "label": "机构全球位置码", "type": "text"},
-        {"key": "product_barcode", "label": "商品条码", "type": "text"},
-        {"key": "product_name", "label": "商品名称", "type": "text"},
-        {"key": "specification_model", "label": "规格型号", "type": "text"},
-    ],
-    "quality_report": [
-        {"key": "client", "label": "委托单位/委托人", "type": "text"},
-        {"key": "manufacturer", "label": "生产单位/生产企业", "type": "text"},
-        {"key": "product_name", "label": "产品名称", "type": "text"},
-        {"key": "specification_model", "label": "规格型号", "type": "text"},
-        {"key": "batch_no", "label": "批号/生产批号", "type": "text"},
-        {"key": "test_item", "label": "检测项目", "type": "text"},
-        {"key": "testing_basis", "label": "检验依据", "type": "textarea"},
-        {"key": "inspection_conclusion", "label": "检验结论", "type": "textarea"},
-        {"key": "report_date", "label": "报告日期", "type": "date"},
-    ],
-    "ccc_certificate": [
-        {"key": "applicant", "label": "申请人", "type": "text"},
-        {"key": "manufacturer", "label": "制造商", "type": "text"},
-        {"key": "factory", "label": "生产厂", "type": "text"},
-        {"key": "product_name", "label": "产品名称", "type": "text"},
-        {"key": "specification_model", "label": "规格型号", "type": "text"},
-        {"key": "certification_standard", "label": "认证标准", "type": "textarea"},
-        {"key": "certificate_status", "label": "证书状态", "type": "text"},
-    ],
-    "hygiene_license": [
-        {"key": "legal_representative", "label": "法定代表人/负责人", "type": "text"},
-        {"key": "registered_address", "label": "注册地址", "type": "text"},
-        {"key": "production_address", "label": "生产地址", "type": "text"},
-        {"key": "production_method", "label": "生产方式", "type": "text"},
-        {"key": "production_item", "label": "生产项目", "type": "text"},
-        {"key": "production_category", "label": "生产类别", "type": "text"},
-        {"key": "approval_date", "label": "批准日期", "type": "date"},
-    ],
-    "production_license": [
-        {"key": "legal_representative", "label": "法定代表人/负责人", "type": "text"},
-        {"key": "production_address", "label": "生产地址", "type": "text"},
-        {"key": "product_name", "label": "产品名称", "type": "text"},
-        {"key": "license_type", "label": "许可证类型", "type": "text"},
-    ],
-    "product_filing": [
-        {"key": "product_name", "label": "产品名称", "type": "text"},
-        {"key": "manufacturer", "label": "生产企业", "type": "text"},
-        {"key": "responsible_person", "label": "境内责任人", "type": "text"},
-        {"key": "product_category", "label": "产品类别", "type": "text"},
-    ],
-    "food_license": [
-        {"key": "legal_representative", "label": "法定代表人/负责人", "type": "text"},
-        {"key": "business_premises", "label": "经营/生产场所", "type": "text"},
-        {"key": "main_business_format", "label": "主体业态", "type": "text"},
-        {"key": "operation_items", "label": "经营/许可项目", "type": "textarea"},
-        {"key": "daily_supervisor", "label": "日常监督管理人员", "type": "text"},
-    ],
-    "contract": [
-        {"key": "contract_amount", "label": "合同金额", "type": "text"},
-        {"key": "payment_method", "label": "付款方式", "type": "text"},
-    ],
-    "tax_certificate": [
-        {"key": "bank_account", "label": "银行账号", "type": "text"},
-        {"key": "taxpayer_type", "label": "纳税人资格", "type": "text"},
-        {"key": "taxpayer_id", "label": "纳税人识别号", "type": "text"},
-    ],
-}
+# 主列表「总预览」列（来自 版面样式.xlsx 总预览页）
+LIST_COLUMNS = [
+    {"key": "company_name", "label": "归属公司"},
+    {"key": "document_type_label", "label": "类型"},
+    {"key": "issued_at", "label": "有效期起"},
+    {"key": "expires_at", "label": "有效期止"},
+]
 
-# 顶层（公共）字段
+# 顶层（公共）字段——列存储，总预览/筛选/有效期都用。
 TOP_FIELDS = [
     "document_type", "company_name", "brand", "certificate_no",
     "issuer", "issued_at", "expires_at", "applicable_scope",
     "ai_summary", "ai_confidence",
 ]
+
+# 每种类型的有序展示/编辑字段，严格对齐「版面样式.xlsx」。
+# source 取值：顶层字段名，或 "extra:<key>"（存进 extra_fields）。
+FIELD_PROFILES: dict[str, list[dict[str, str]]] = {
+    "business_license": [
+        {"label": "公司名称", "source": "company_name"},
+        {"label": "注册金", "source": "extra:registered_capital"},
+        {"label": "注册时间", "source": "issued_at"},
+        {"label": "到期时间", "source": "expires_at"},
+        {"label": "经营范围", "source": "applicable_scope"},
+        {"label": "编号/税号", "source": "certificate_no"},
+        {"label": "法人", "source": "extra:legal_representative"},
+        {"label": "地址", "source": "extra:address"},
+    ],
+    "contract": [
+        {"label": "合同编号", "source": "certificate_no"},
+        {"label": "甲方", "source": "company_name"},
+        {"label": "乙方", "source": "issuer"},
+        {"label": "丙方", "source": "extra:party_c"},
+        {"label": "类型", "source": "extra:contract_type"},
+        {"label": "内容简述", "source": "applicable_scope"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+    "trademark_certificate": [
+        {"label": "商标名称", "source": "brand"},
+        {"label": "归属公司", "source": "company_name"},
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+    "authorization_letter": [
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "授权方", "source": "company_name"},
+        {"label": "被授权方", "source": "issuer"},
+        {"label": "授权品牌", "source": "brand"},
+        {"label": "授权内容", "source": "applicable_scope"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+    "quality_report": [
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "归属公司", "source": "company_name"},
+        {"label": "检测商品名", "source": "applicable_scope"},
+        {"label": "检测机构", "source": "issuer"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+    "ccc_certificate": [
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "归属公司", "source": "company_name"},
+        {"label": "商品名", "source": "applicable_scope"},
+        {"label": "出具机构", "source": "issuer"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+}
+
+# 版面样式未细化的类型（条码证/卫生许可证/生产许可证/产品备案/食品许可证/税务/其他）走通用字段。
+DEFAULT_PROFILE = [
+    {"label": "归属公司", "source": "company_name"},
+    {"label": "证件编号", "source": "certificate_no"},
+    {"label": "适用/范围", "source": "applicable_scope"},
+    {"label": "有效期起", "source": "issued_at"},
+    {"label": "有效期止", "source": "expires_at"},
+]
+
+
+def field_profile(document_type: str) -> list[dict[str, str]]:
+    return FIELD_PROFILES.get(document_type, DEFAULT_PROFILE)
+
+
+# 专属字段（extra_fields）——只保留 FIELD_PROFILES 里 extra: 的字段，用于归一化时过滤。
+EXTRA_FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
+    "business_license": [
+        {"key": "registered_capital", "label": "注册金", "type": "text"},
+        {"key": "legal_representative", "label": "法人", "type": "text"},
+        {"key": "address", "label": "地址", "type": "text"},
+    ],
+    "contract": [
+        {"key": "party_c", "label": "丙方", "type": "text"},
+        {"key": "contract_type", "label": "类型", "type": "text"},
+    ],
+}
 
 # 规则层类型判断关键词（命中越多越靠前）
 TYPE_KEYWORDS: dict[str, list[str]] = {
@@ -152,21 +160,24 @@ TYPE_KEYWORDS: dict[str, list[str]] = {
 
 
 def extraction_instruction() -> str:
-    """识别提示词（移植参考版 extractionInstruction，给 AI 用）。"""
+    """识别提示词（字段对齐「版面样式.xlsx」）。"""
     types = "，".join(f"{k}={v}" for k, v in DOCUMENT_TYPES.items())
-    schemas = json.dumps(EXTRA_FIELD_SCHEMAS, ensure_ascii=False)
     return (
-        "你是供应商资料库的文档管理员。请判断资料类型并提取结构化字段，只输出 JSON，不要解释。\n\n"
-        f"可选资料类型：{types}\n\n"
-        f"不同资料类型的专属字段 schema：{schemas}\n\n"
-        "质检/检测报告：company_name 优先填委托单位/委托人；生产单位写入 extra_fields.manufacturer；产品名称写入 applicable_scope 和 extra_fields.product_name；规格型号写入 extra_fields.specification_model。\n"
-        "商标证：company_name 填注册人，brand 填商标名称，certificate_no 填商标注册号，applicable_scope 填核定使用商品/服务。\n"
-        "授权书：company_name 填授权方，issuer 填被授权方，applicable_scope 填授权内容/产品，issued_at/expires_at 填授权期限起止。\n"
-        "条码证：company_name 填成员/企业名称，certificate_no 填物编注字证号，extra_fields.manufacturer_identification_code 填厂商识别代码。\n"
-        "卫生许可证：company_name 填单位名称，certificate_no 填卫消证字号，applicable_scope 填生产项目/类别，issued_at/expires_at 填有效期起止。\n"
-        "营业执照：company_name 填公司名称，certificate_no 填统一社会信用代码，extra_fields.legal_representative 法定代表人，applicable_scope 填经营范围。\n\n"
-        "日期一律用 YYYY-MM-DD。识别不出的字段返回空字符串。ai_confidence 是 0-100 的整数。\n"
-        "返回字段：document_type, company_name, brand, certificate_no, issuer, issued_at, expires_at, applicable_scope, extra_fields(对象), tags(数组), ai_summary, ai_confidence。"
+        "你是供应商资料库的文档管理员。请判断证件类型并提取结构化字段，只输出 JSON，不要解释、不要 Markdown。\n\n"
+        f"可选资料类型(document_type 取等号左边的代码)：{types}\n\n"
+        "统一顶层字段（所有类型都尽量填）：\n"
+        "- company_name 归属公司：营业执照填公司名称；合同填甲方；商标证/质检/3C 填归属公司/注册人；授权书填授权方。\n"
+        "- certificate_no 证件编号：营业执照填统一社会信用代码/税号；合同填合同编号；商标证/授权书/质检/3C 填证书编号。\n"
+        "- brand 品牌：商标证填商标名称；授权书填授权品牌；其它无则留空。\n"
+        "- issuer：合同填乙方；授权书填被授权方；质检报告填检测机构；3C 填出具机构。\n"
+        "- applicable_scope：营业执照填经营范围；合同填内容简述；授权书填授权内容；质检报告填检测商品名；3C 填商品名。\n"
+        "- issued_at 有效期起 / expires_at 有效期止：营业执照=注册时间/到期时间；其它=证件有效期起止；授权书=授权期限起止；质检报告若只有报告日期则填 issued_at。\n\n"
+        "各类型专属字段放进 extra_fields（对象，只填下面列出的 key，没有就不填）：\n"
+        "- business_license 营业执照：registered_capital(注册金)、legal_representative(法人)、address(地址)。\n"
+        "- contract 合同：party_c(丙方)、contract_type(合同类型，如采购/服务/代理)。\n"
+        "- 其它类型 extra_fields 留空对象 {}。\n\n"
+        "日期一律 YYYY-MM-DD。识别不出的字段填空字符串。ai_confidence 是 0-100 的整数。\n"
+        "返回 JSON：{document_type, company_name, brand, certificate_no, issuer, issued_at, expires_at, applicable_scope, extra_fields, tags, ai_summary, ai_confidence}"
     )
 
 
@@ -419,3 +430,19 @@ def merge_rule_and_ai(rule: dict[str, Any], ai: dict[str, Any] | None) -> dict[s
     if not merged.get("tags") and rule.get("tags"):
         merged["tags"] = rule["tags"]
     return normalize_suggestion(merged)
+
+
+def project_to_profile(suggestion: dict[str, Any]) -> list[dict[str, str]]:
+    """按类型版面（FIELD_PROFILES）把识别结果投影成有序 [{label, source, value}]，给前端渲染/编辑。"""
+    extra = suggestion.get("extra_fields") or {}
+    rows: list[dict[str, str]] = []
+    for field in field_profile(str(suggestion.get("document_type") or "other")):
+        source = field["source"]
+        if source.startswith("extra:"):
+            value = extra.get(source.split(":", 1)[1], "")
+        elif source == "document_type_label":
+            value = suggestion.get("document_type_label", "")
+        else:
+            value = suggestion.get(source, "")
+        rows.append({"label": field["label"], "source": source, "value": str(value or "")})
+    return rows

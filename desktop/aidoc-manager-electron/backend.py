@@ -295,6 +295,7 @@ def db_path(root: Path | None = None) -> Path:
 
 def connect_db(root: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path(root)))
+    conn.row_factory = sqlite3.Row  # 既能按列名也能按下标取值，兼容旧的 row[0] 写法
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
@@ -652,11 +653,18 @@ def ensure_recognition_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# 最近一次识别失败的真实原因（CLI/调用方诊断用；成功时为空串）
+LAST_RECOGNIZE_ERROR = ""
+
+
 def recognize_via_server(mode: str, text: str, images: list[bytes], page_count: int, filename: str) -> dict[str, Any] | None:
     """把证据（文字或页图 base64）发服务器做 AI 识别，按页计费。
-    服务器端点未就绪 / 离线时返回 None，调用方退回纯规则识别。"""
+    失败返回 None 并把真实原因写入 LAST_RECOGNIZE_ERROR，调用方退回纯规则识别。"""
+    global LAST_RECOGNIZE_ERROR
+    LAST_RECOGNIZE_ERROR = ""
     token = STATE.get("token") or ""
     if not token:
+        LAST_RECOGNIZE_ERROR = "未注册或离线（没有 token）"
         return None
     body: dict[str, Any] = {
         "mode": mode,
@@ -670,14 +678,27 @@ def recognize_via_server(mode: str, text: str, images: list[bytes], page_count: 
         body["text"] = text[:20000]
     try:
         resp = request_json("/api/desktop/document/recognize", body, token=token, timeout=300)
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", "replace")
+            msg = json.loads(detail).get("message") or detail
+        except Exception:
+            msg = ""
+        LAST_RECOGNIZE_ERROR = f"服务器 HTTP {exc.code}：{str(msg)[:240]}"
+        return None
+    except Exception as exc:
+        LAST_RECOGNIZE_ERROR = f"{type(exc).__name__}：{str(exc)[:240]}"
         return None
     if not isinstance(resp, dict):
+        LAST_RECOGNIZE_ERROR = "服务器返回不是 JSON 对象"
         return None
     data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
     content = data.get("content") if isinstance(data, dict) else None
     if isinstance(content, str):
-        return docintel.parse_ai_json(content)
+        parsed = docintel.parse_ai_json(content)
+        if parsed is None:
+            LAST_RECOGNIZE_ERROR = "AI 返回的不是有效 JSON：" + content[:160]
+        return parsed
     return data if isinstance(data, dict) else None
 
 
@@ -782,6 +803,152 @@ def command_analyze_document(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _row_to_suggestion(r: sqlite3.Row) -> dict[str, Any]:
+    """DB 行 → 统一 suggestion 结构（给 project_to_profile 用）。"""
+    try:
+        extra = json.loads(r["extra_fields"]) if r["extra_fields"] else {}
+    except Exception:
+        extra = {}
+    dtype = r["document_type"] or "other"
+    return {
+        "document_type": dtype,
+        "document_type_label": r["document_type_label"] or docintel.DOCUMENT_TYPES.get(dtype, "其他资料"),
+        "company_name": r["company_name"] or "",
+        "brand": r["brand"] or "",
+        "certificate_no": r["certificate_no"] or "",
+        "issuer": r["issuer"] or "",
+        "issued_at": r["issued_at"] or "",
+        "expires_at": r["expires_at"] or "",
+        "applicable_scope": r["applicable_scope"] or "",
+        "extra_fields": extra if isinstance(extra, dict) else {},
+        "ai_summary": r["ai_summary"] or "",
+        "ai_confidence": int(r["ai_confidence"] or 0),
+    }
+
+
+def command_document_meta(_: dict[str, Any]) -> dict[str, Any]:
+    """证件类型、主列表列、各类型版面字段——前端动态渲染用（对齐 版面样式.xlsx）。"""
+    return {
+        "types": [{"key": k, "label": v} for k, v in docintel.DOCUMENT_TYPES.items()],
+        "list_columns": docintel.LIST_COLUMNS,
+        "profiles": docintel.FIELD_PROFILES,
+        "default_profile": docintel.DEFAULT_PROFILE,
+    }
+
+
+def command_list_documents(args: dict[str, Any]) -> dict[str, Any]:
+    """资料库列表：按主列表列返回，支持按 review_status / document_type 过滤。"""
+    require_unlocked()
+    root = library_dir()
+    conn = connect_db(root)
+    where, params = ["1=1"], []
+    status = str(args.get("review_status") or "").strip()
+    dtype = str(args.get("document_type") or "").strip()
+    if status:
+        where.append("review_status = ?")
+        params.append(status)
+    if dtype:
+        where.append("document_type = ?")
+        params.append(dtype)
+    rows = conn.execute(
+        f"SELECT * FROM documents WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT 500", params
+    ).fetchall()
+
+    docs = []
+    for r in rows:
+        sug = _row_to_suggestion(r)
+        list_values = {}
+        for col in docintel.LIST_COLUMNS:
+            key = col["key"]
+            list_values[key] = sug["document_type_label"] if key == "document_type_label" else sug.get(key, "")
+        docs.append({
+            "id": r["id"], "file_name": r["file_name"], "extension": r["extension"],
+            "page_count": r["page_count"], "review_status": r["review_status"] or "",
+            "recognized": bool(r["recognized_at"]), "is_duplicate": bool(r["duplicate_of_id"]),
+            "document_type": sug["document_type"], "document_type_label": sug["document_type_label"],
+            "ai_confidence": sug["ai_confidence"], "list_values": list_values,
+        })
+
+    def count(sql, p=()):
+        return int(conn.execute(sql, p).fetchone()[0])
+
+    stats = {
+        "total": count("SELECT COUNT(*) FROM documents"),
+        "unrecognized": count("SELECT COUNT(*) FROM documents WHERE recognized_at IS NULL"),
+        "pending": count("SELECT COUNT(*) FROM documents WHERE review_status='pending_review'"),
+        "confirmed": count("SELECT COUNT(*) FROM documents WHERE review_status='confirmed'"),
+        "duplicate": count("SELECT COUNT(*) FROM documents WHERE duplicate_of_id IS NOT NULL"),
+    }
+    conn.close()
+    return {"documents": docs, "stats": stats}
+
+
+def command_get_document(args: dict[str, Any]) -> dict[str, Any]:
+    """单份资料详情：按类型版面投影出有序字段，给详情/编辑用。"""
+    require_unlocked()
+    doc_id = int(args.get("id") or 0)
+    conn = connect_db(library_dir())
+    r = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    conn.close()
+    if not r:
+        raise RuntimeError("资料不存在。")
+    sug = _row_to_suggestion(r)
+    return {
+        "id": r["id"], "file_name": r["file_name"], "extension": r["extension"],
+        "page_count": r["page_count"], "managed_path": r["managed_path"] or "", "original_path": r["original_path"] or "",
+        "review_status": r["review_status"] or "", "recognized": bool(r["recognized_at"]),
+        "document_type": sug["document_type"], "document_type_label": sug["document_type_label"],
+        "ai_confidence": sug["ai_confidence"], "ai_summary": sug["ai_summary"],
+        "profile": docintel.project_to_profile(sug),
+    }
+
+
+def command_confirm_document(args: dict[str, Any]) -> dict[str, Any]:
+    """保存人工核对后的字段并改状态（确认/驳回）。
+    args: {id, document_type, values:{source: value}, review_status}"""
+    require_unlocked()
+    doc_id = int(args.get("id") or 0)
+    if doc_id <= 0:
+        raise RuntimeError("缺少资料 id。")
+    dtype = str(args.get("document_type") or "other")
+    if dtype not in docintel.DOCUMENT_TYPES:
+        dtype = "other"
+    review_status = str(args.get("review_status") or "confirmed")
+    values = args.get("values") if isinstance(args.get("values"), dict) else {}
+
+    top = {"company_name": "", "brand": "", "certificate_no": "", "issuer": "",
+           "issued_at": "", "expires_at": "", "applicable_scope": ""}
+    extra: dict[str, Any] = {}
+    for source, value in values.items():
+        text = str(value or "").strip()
+        if str(source).startswith("extra:"):
+            key = str(source).split(":", 1)[1]
+            if text:
+                extra[key] = text
+        elif source in top:
+            top[source] = docintel.normalize_date(text) if source in ("issued_at", "expires_at") else text
+
+    conn = connect_db(library_dir())
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """
+        UPDATE documents SET
+          document_type = ?, document_type_label = ?, company_name = ?, brand = ?,
+          certificate_no = ?, issuer = ?, issued_at = ?, expires_at = ?, applicable_scope = ?,
+          extra_fields = ?, review_status = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (dtype, docintel.DOCUMENT_TYPES[dtype], top["company_name"], top["brand"], top["certificate_no"],
+         top["issuer"], top["issued_at"], top["expires_at"], top["applicable_scope"],
+         json.dumps(extra, ensure_ascii=False), review_status, now, doc_id),
+    )
+    conn.commit()
+    duplicate_of = _mark_duplicate_by_cert(conn, doc_id, top["certificate_no"])
+    conn.commit()
+    conn.close()
+    return {"id": doc_id, "review_status": review_status, "duplicate_of_id": duplicate_of}
+
+
 def command_library_summary(_: dict[str, Any]) -> dict[str, Any]:
     require_unlocked()
     try:
@@ -822,6 +989,10 @@ COMMANDS = {
     "set_library_dir": command_set_library_dir,
     "scan_folder": command_scan_folder,
     "analyze_document": command_analyze_document,
+    "document_meta": command_document_meta,
+    "list_documents": command_list_documents,
+    "get_document": command_get_document,
+    "confirm_document": command_confirm_document,
     "library_summary": command_library_summary,
 }
 

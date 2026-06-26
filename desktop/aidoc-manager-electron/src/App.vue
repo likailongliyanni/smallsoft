@@ -51,11 +51,10 @@
           </div>
         </div>
         <nav>
-          <button class="nav-item active"><LayoutDashboard :size="18" />工作台</button>
-          <button class="nav-item"><FolderInput :size="18" />资料导入</button>
-          <button class="nav-item"><ListChecks :size="18" />识别队列</button>
-          <button class="nav-item"><CreditCard :size="18" />页数额度</button>
-          <button class="nav-item"><Settings :size="18" />本地设置</button>
+          <button class="nav-item" :class="{ active: view === 'workbench' }" @click="view = 'workbench'"><LayoutDashboard :size="18" />工作台</button>
+          <button class="nav-item" :class="{ active: view === 'library' }" @click="switchToLibrary"><ListChecks :size="18" />识别队列</button>
+          <button class="nav-item" disabled><CreditCard :size="18" />页数额度</button>
+          <button class="nav-item" disabled><Settings :size="18" />本地设置</button>
         </nav>
       </aside>
 
@@ -74,6 +73,7 @@
           </div>
         </header>
 
+        <div v-show="view === 'workbench'">
         <section class="metric-row">
           <article class="metric-card">
             <span class="metric-icon blue"><Files :size="20" /></span>
@@ -227,8 +227,93 @@
             </div>
           </div>
         </section>
+        </div>
+
+        <!-- ───────────── 识别队列 / 资料库 ───────────── -->
+        <div v-show="view === 'library'" class="library-view">
+          <section class="metric-row">
+            <article class="metric-card lib-stat" :class="{ active: lib.filterStatus === '' && !lib.onlyUnrecognized }" @click="setStatusFilter('')">
+              <div><small>全部资料</small><strong>{{ lib.stats.total }}</strong></div>
+            </article>
+            <article class="metric-card lib-stat" :class="{ active: lib.onlyUnrecognized }" @click="setUnrecognized">
+              <div><small>未识别</small><strong>{{ lib.stats.unrecognized }}</strong></div>
+            </article>
+            <article class="metric-card lib-stat" :class="{ active: lib.filterStatus === 'pending_review' }" @click="setStatusFilter('pending_review')">
+              <div><small>待确认</small><strong>{{ lib.stats.pending }}</strong></div>
+            </article>
+            <article class="metric-card lib-stat" :class="{ active: lib.filterStatus === 'confirmed' }" @click="setStatusFilter('confirmed')">
+              <div><small>已确认</small><strong>{{ lib.stats.confirmed }}</strong></div>
+            </article>
+            <article class="metric-card lib-stat">
+              <div><small>重复资料</small><strong>{{ lib.stats.duplicate }}</strong></div>
+            </article>
+          </section>
+
+          <div class="type-tabs">
+            <button :class="{ active: lib.filterType === '' }" @click="setTypeFilter('')">全部</button>
+            <button v-for="t in meta.types" :key="t.key" :class="{ active: lib.filterType === t.key }" @click="setTypeFilter(t.key)">{{ t.label }}</button>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head compact">
+              <div><p class="eyebrow">资料库</p><h2>共 {{ lib.docs.length }} 条</h2></div>
+              <div class="lib-toolbar">
+                <button class="ghost-btn" :disabled="lib.loading" @click="loadDocs"><RefreshCw :size="15" />刷新</button>
+                <button class="primary-btn" :disabled="lib.loading || !unrecognizedDocs.length" @click="recognizeAll"><Sparkles :size="15" />一键识别未识别({{ unrecognizedDocs.length }})</button>
+              </div>
+            </div>
+
+            <div class="lib-table">
+              <div class="lib-head" :style="gridStyle">
+                <span>文件</span>
+                <span v-for="c in meta.list_columns" :key="c.key">{{ c.label }}</span>
+                <span>状态</span>
+                <span>操作</span>
+              </div>
+              <div v-if="!lib.docs.length" class="empty-row">这里还没有资料。先去「工作台」扫描导入，再回来识别。</div>
+              <div v-for="d in lib.docs" :key="d.id" class="lib-row" :style="gridStyle">
+                <span class="file-cell" :title="d.file_name"><FileText :size="15" /><em>{{ d.file_name }}</em></span>
+                <span v-for="c in meta.list_columns" :key="c.key" class="cell-clip">{{ d.list_values[c.key] || '—' }}</span>
+                <span><i class="dot" :class="reviewClass(d)"></i>{{ reviewLabel(d) }}<i v-if="d.is_duplicate" class="dup-tag">重复</i></span>
+                <span class="ops">
+                  <button class="link-btn" :disabled="d.busy" @click="recognizeOne(d)">{{ d.busy ? '识别中…' : (d.recognized ? '重新识别' : '识别') }}</button>
+                  <button class="link-btn" @click="openDetail(d.id)">编辑</button>
+                </span>
+              </div>
+            </div>
+          </section>
+        </div>
       </section>
     </template>
+
+    <!-- 详情 / 字段编辑 -->
+    <div v-if="detail.open" class="modal-mask" @click.self="closeDetail">
+      <div class="modal">
+        <header class="modal-head">
+          <div><strong>{{ detail.file_name }}</strong><span class="conf" v-if="detail.ai_confidence">AI 置信 {{ detail.ai_confidence }}</span></div>
+          <button class="icon-btn" @click="closeDetail"><X :size="18" /></button>
+        </header>
+        <div class="modal-body">
+          <label class="edit-field">
+            <span>资料类型</span>
+            <select v-model="detail.document_type">
+              <option v-for="t in meta.types" :key="t.key" :value="t.key">{{ t.label }}</option>
+            </select>
+          </label>
+          <label v-for="f in detailFields" :key="f.source" class="edit-field">
+            <span>{{ f.label }}</span>
+            <input v-model="detail.values[f.source]" :placeholder="f.label" />
+          </label>
+          <p v-if="detail.error" class="error-text">{{ detail.error }}</p>
+        </div>
+        <footer class="modal-foot">
+          <button class="ghost-btn" :disabled="detail.busy" @click="recognizeInDetail"><Sparkles :size="15" />重新识别</button>
+          <span class="spacer"></span>
+          <button class="secondary-btn" :disabled="detail.busy" @click="confirmDetail('rejected')">驳回</button>
+          <button class="primary-btn" :disabled="detail.busy" @click="confirmDetail('confirmed')"><CheckCircle2 :size="16" />确认入库</button>
+        </footer>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -258,6 +343,7 @@ import {
   Sparkles,
   Unlock,
   Wifi,
+  X,
 } from 'lucide-vue-next'
 
 const api = window.aidocAPI
@@ -486,6 +572,162 @@ function statusLabel(status) {
     duplicate: '重复跳过',
     failed: '失败',
   }[status] || '已入库'
+}
+
+// ───────────── 识别队列 / 资料库 ─────────────
+const view = ref('workbench')
+const meta = reactive({ types: [], list_columns: [], profiles: {}, default_profile: [] })
+const lib = reactive({
+  docs: [],
+  stats: { total: 0, unrecognized: 0, pending: 0, confirmed: 0, duplicate: 0 },
+  filterStatus: '',
+  filterType: '',
+  onlyUnrecognized: false,
+  loading: false,
+})
+const detail = reactive({
+  open: false, id: 0, file_name: '', document_type: 'other',
+  values: {}, ai_confidence: 0, busy: false, error: '',
+})
+
+const unrecognizedDocs = computed(() => lib.docs.filter((d) => !d.recognized))
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `2fr repeat(${meta.list_columns.length || 4}, 1fr) 1fr 1.3fr`,
+}))
+const detailFields = computed(() => meta.profiles[detail.document_type] || meta.default_profile)
+
+async function loadMeta() {
+  if (meta.types.length) return
+  const data = await backend('document_meta')
+  meta.types = data.types || []
+  meta.list_columns = data.list_columns || []
+  meta.profiles = data.profiles || {}
+  meta.default_profile = data.default_profile || []
+}
+
+async function loadDocs() {
+  lib.loading = true
+  try {
+    const args = {}
+    if (!lib.onlyUnrecognized && lib.filterStatus) args.review_status = lib.filterStatus
+    if (lib.filterType) args.document_type = lib.filterType
+    const data = await backend('list_documents', args)
+    let docs = (data.documents || []).map((x) => ({ ...x, busy: false }))
+    if (lib.onlyUnrecognized) docs = docs.filter((d) => !d.recognized)
+    lib.docs = docs
+    lib.stats = data.stats || lib.stats
+  } catch {
+    lib.docs = []
+  } finally {
+    lib.loading = false
+  }
+}
+
+async function switchToLibrary() {
+  view.value = 'library'
+  try {
+    await loadMeta()
+    await loadDocs()
+  } catch (e) {
+    /* 未设资料库时静默 */
+  }
+}
+
+function setStatusFilter(status) {
+  lib.onlyUnrecognized = false
+  lib.filterStatus = status
+  loadDocs()
+}
+function setUnrecognized() {
+  lib.onlyUnrecognized = true
+  lib.filterStatus = ''
+  loadDocs()
+}
+function setTypeFilter(type) {
+  lib.filterType = type
+  loadDocs()
+}
+
+function reviewClass(d) {
+  if (!d.recognized) return 'unrecognized'
+  return { pending_review: 'pending', confirmed: 'confirmed', rejected: 'rejected' }[d.review_status] || 'pending'
+}
+function reviewLabel(d) {
+  if (!d.recognized) return '未识别'
+  return { pending_review: '待确认', confirmed: '已确认', rejected: '已驳回' }[d.review_status] || '待确认'
+}
+
+async function recognizeOne(d) {
+  if (d.busy) return
+  d.busy = true
+  try {
+    await backend('analyze_document', { id: d.id })
+    await loadDocs()
+  } catch (error) {
+    d.busy = false
+    alert('识别失败：' + error.message)
+  }
+}
+async function recognizeAll() {
+  const targets = unrecognizedDocs.value.slice()
+  for (const d of targets) {
+    try {
+      await backend('analyze_document', { id: d.id })
+    } catch {
+      /* 单份失败继续 */
+    }
+  }
+  await loadDocs()
+}
+
+async function openDetail(id) {
+  detail.error = ''
+  try {
+    const data = await backend('get_document', { id })
+    detail.id = data.id
+    detail.file_name = data.file_name
+    detail.document_type = data.document_type || 'other'
+    detail.ai_confidence = data.ai_confidence || 0
+    const values = {}
+    for (const row of data.profile || []) values[row.source] = row.value || ''
+    detail.values = values
+    detail.open = true
+  } catch (error) {
+    alert('打开失败：' + error.message)
+  }
+}
+function closeDetail() {
+  detail.open = false
+}
+async function recognizeInDetail() {
+  detail.busy = true
+  detail.error = ''
+  try {
+    await backend('analyze_document', { id: detail.id })
+    await openDetail(detail.id)
+  } catch (error) {
+    detail.error = '识别失败：' + error.message
+  } finally {
+    detail.busy = false
+  }
+}
+async function confirmDetail(status) {
+  detail.busy = true
+  detail.error = ''
+  try {
+    await backend('confirm_document', {
+      id: detail.id,
+      document_type: detail.document_type,
+      values: detail.values,
+      review_status: status,
+    })
+    detail.open = false
+    await loadDocs()
+  } catch (error) {
+    detail.error = '保存失败：' + error.message
+  } finally {
+    detail.busy = false
+  }
 }
 
 onMounted(async () => {

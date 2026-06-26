@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\QuotaLog;
 use App\Models\User;
+use App\Services\DocumentRecognizeService;
 use App\Services\ImageDescribeService;
 use App\Services\ProductParamsService;
 use App\Services\SceneReconstructService;
@@ -153,6 +154,59 @@ class DesktopWatermarkController extends Controller
         }
     }
 
+    /**
+     * 桌面「AI 档案管理」证件识别：收 文字/页图 → 阿里云视觉模型 → 返回字段 JSON。
+     * 按实际识别的页数扣额度（vision 按页图张数，text 按 1）。识别失败不扣费。
+     */
+    public function recognizeDocument(Request $request, TokenService $tokens, DocumentRecognizeService $service): array
+    {
+        @set_time_limit(300);
+
+        $user = $tokens->userFromRequest($request);
+        abort_if(! $user, 401, '请先登记软件编号');
+        abort_if($user->availableGenerations() <= 0, 402, '识别页额度不足，请把软件编号发给客服充值。');
+
+        $data = $request->validate([
+            'mode' => ['required', 'string', 'in:vision,text'],
+            'text' => ['nullable', 'string', 'max:40000'],
+            'images' => ['nullable', 'array', 'max:4'],
+            'images.*' => ['string'],
+            'instruction' => ['nullable', 'string', 'max:20000'],
+            'filename' => ['nullable', 'string', 'max:255'],
+            'page_count' => ['nullable', 'integer', 'min:1', 'max:200'],
+        ]);
+
+        $mode = $data['mode'];
+        $images = $mode === 'vision' ? array_values((array) ($data['images'] ?? [])) : [];
+        if ($mode === 'vision' && $images === []) {
+            abort(422, '识别请求缺少证件图片。');
+        }
+        // 实际识别页数：视觉按页图张数，文本按 1。识别失败时下面不会走到扣费。
+        $chargePages = $mode === 'vision' ? max(1, count($images)) : 1;
+        abort_if($user->availableGenerations() < $chargePages, 402, '识别页额度不足，请把软件编号发给客服充值。');
+
+        try {
+            $result = $service->recognize(
+                $mode,
+                (string) ($data['text'] ?? ''),
+                $images,
+                (string) ($data['instruction'] ?? ''),
+            );
+            $remaining = $this->consumeRecognitionQuota($user, $chargePages);
+
+            return $this->ok([
+                'data' => [
+                    'content' => $result['content'],
+                    'fields' => $result['fields'],
+                ],
+                'charged_pages' => $chargePages,
+                'quota' => ['available' => $remaining],
+            ]);
+        } catch (Throwable $e) {
+            abort(422, $e->getMessage());
+        }
+    }
+
     /** 一句话商品介绍 → 可编辑的商品参数表。 */
     public function generateParams(Request $request, TokenService $tokens, ProductParamsService $service): array
     {
@@ -216,6 +270,38 @@ class DesktopWatermarkController extends Controller
                 'change_value' => -1,
                 'source' => 'snap_saver_scene_reconstruct',
                 'note' => '智能截图软件 AI 商品主视觉扣除 1 张额度',
+            ]);
+
+            return $fresh->fresh()->availableGenerations();
+        });
+    }
+
+    /** AI 档案管理证件识别扣页额度：一次扣 $pages 页（先免费后付费）。 */
+    private function consumeRecognitionQuota(User $user, int $pages): int
+    {
+        $pages = max(1, $pages);
+
+        return DB::transaction(function () use ($user, $pages): int {
+            $fresh = User::query()->lockForUpdate()->findOrFail($user->id);
+            if ($fresh->availableGenerations() < $pages) {
+                throw new RuntimeException('识别页额度不足，请把软件编号发给客服充值。');
+            }
+
+            $remaining = $pages;
+            $fromFree = min((int) $fresh->free_generations, $remaining);
+            if ($fromFree > 0) {
+                $fresh->decrement('free_generations', $fromFree);
+                $remaining -= $fromFree;
+            }
+            if ($remaining > 0) {
+                $fresh->decrement('paid_generations', $remaining);
+            }
+
+            QuotaLog::create([
+                'user_id' => $fresh->id,
+                'change_value' => -$pages,
+                'source' => 'aidoc_document_recognize',
+                'note' => 'AI 档案管理证件识别扣除 '.$pages.' 页额度',
             ]);
 
             return $fresh->fresh()->availableGenerations();

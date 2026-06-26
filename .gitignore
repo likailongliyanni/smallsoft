@@ -33,6 +33,11 @@ public/.well-known/acme-challenge/*
 
 .DS_Store
 Thumbs.db
+.idea/
+
+# ── 证件资料：真实敏感证件样本/交接知识包，绝不入库 ──
+AI资料管理模块_源码知识库_*/
+desktop/aidoc-manager-electron/测试路径/
 
 desktop/snap-saver/截图存图助手配置.json
 desktop/snap-saver/截图存图助手错误日志.txt

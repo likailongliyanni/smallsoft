@@ -42,6 +42,7 @@ Route::post('/desktop/watermark/remove', [DesktopWatermarkController::class, 're
 Route::post('/desktop/doc/describe-image', [DesktopWatermarkController::class, 'describeImage']);
 Route::post('/desktop/doc/generate-params', [DesktopWatermarkController::class, 'generateParams']);
 Route::post('/desktop/scene/reconstruct', [DesktopWatermarkController::class, 'reconstructScene']);
+Route::post('/desktop/document/recognize', [DesktopWatermarkController::class, 'recognizeDocument']);
 Route::post('/excel-automation/image-extract/plan', [SpreadsheetImageController::class, 'plan']);
 Route::post('/excel-automation/table-merge/plan', [TableMergeController::class, 'plan']);
 Route::post('/excel-automation/table-tidy/plan', [TableTidyController::class, 'plan']);

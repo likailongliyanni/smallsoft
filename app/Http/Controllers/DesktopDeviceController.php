@@ -16,6 +16,7 @@ class DesktopDeviceController extends Controller
     private const SOFTWARE_NAMES = [
         'pic' => '截图/图片软件',
         'auto' => '自动化软件',
+        'aidoc' => 'AI档案管理',
     ];
 
     public function register(Request $request, TokenService $tokens): array
@@ -132,6 +133,10 @@ class DesktopDeviceController extends Controller
         if ($a === '') {
             return 'pic';
         }
+        // AI 档案管理（app=ai-doc）：独立软件代码 + 独立页额度，不和截图软件共用账户。
+        if (str_contains($a, 'aidoc') || str_contains($a, 'ai-doc') || str_contains($a, '档案')) {
+            return 'aidoc';
+        }
         if (str_contains($a, 'auto') || str_contains($a, 'web') || str_contains($a, '自动化')) {
             return 'auto';
         }
@@ -147,6 +152,7 @@ class DesktopDeviceController extends Controller
     {
         return match ($code) {
             'auto' => (int) config('platform.auto_default_quota', config('platform.snap_saver_default_quota', 10)),
+            'aidoc' => (int) config('platform.aidoc_default_quota', 50),
             default => (int) config('platform.snap_saver_default_quota', 10),
         };
     }

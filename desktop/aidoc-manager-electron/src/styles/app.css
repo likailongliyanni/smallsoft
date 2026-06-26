@@ -606,3 +606,70 @@ button:disabled {
   .metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-grid { grid-template-columns: 1fr; }
 }
+
+/* ───────────── 识别队列 / 资料库 ───────────── */
+.library-view { display: flex; flex-direction: column; gap: 16px; }
+
+.lib-stat { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.lib-stat:hover { border-color: var(--border-strong); }
+.lib-stat.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+
+.type-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-tabs button {
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  padding: 6px 13px; border-radius: 999px; font-size: 13px; cursor: pointer;
+}
+.type-tabs button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+.lib-toolbar { display: flex; gap: 8px; align-items: center; }
+
+.lib-table { margin-top: 6px; }
+.lib-head, .lib-row {
+  display: grid; align-items: center; gap: 10px;
+  padding: 11px 14px; font-size: 13px;
+}
+.lib-head { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+.lib-row { border-bottom: 1px solid var(--border); }
+.lib-row:hover { background: var(--panel-2); }
+.cell-clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #23362b; }
+
+.dot.unrecognized { background: #9aa6a0; }
+.dot.pending { background: var(--amber); }
+.dot.confirmed { background: var(--primary); }
+.dot.rejected { background: var(--red); }
+
+.dup-tag {
+  margin-left: 8px; font-style: normal; font-size: 11px; color: var(--amber);
+  background: var(--amber-soft); border-radius: 4px; padding: 1px 6px;
+}
+
+.ops { display: flex; gap: 12px; }
+.link-btn { border: none; background: none; color: var(--primary); cursor: pointer; font-size: 13px; padding: 0; }
+.link-btn:hover { color: var(--primary-dark); text-decoration: underline; }
+.link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+
+/* 详情 / 编辑弹窗 */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(20, 32, 26, .42);
+  display: grid; place-items: center; z-index: 50; padding: 24px;
+}
+.modal {
+  width: 560px; max-width: 96vw; max-height: 92vh; display: flex; flex-direction: column;
+  background: var(--panel); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.modal-head strong { font-size: 15px; color: var(--text); }
+.modal-head .conf { margin-left: 10px; font-size: 12px; color: var(--amber); background: var(--amber-soft); border-radius: 6px; padding: 2px 8px; }
+.modal-body { padding: 18px 20px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.edit-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.edit-field span { color: var(--muted); font-weight: 500; }
+.edit-field input, .edit-field select {
+  border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; font-size: 14px;
+  background: var(--panel); color: var(--text); font-family: inherit;
+}
+.edit-field input:focus, .edit-field select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.modal-foot { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); }
+.modal-foot .spacer { flex: 1; }
