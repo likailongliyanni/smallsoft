@@ -71,7 +71,16 @@ CONFIG_LOCK = threading.Lock()
 
 
 def emit(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    # PyInstaller 的无控制台进程在部分中文 Windows 上仍会把文本管道设为 GBK，
+    # 即使父进程传了 PYTHONIOENCODING。直接写二进制 UTF-8，避免文件名、类型和
+    # 服务端错误消息在 Electron 里变成乱码。
+    raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is not None:
+        binary.write(raw)
+        binary.flush()
+        return
+    sys.stdout.write(raw.decode("utf-8"))
     sys.stdout.flush()
 
 
@@ -2272,7 +2281,11 @@ COMMANDS = {
 
 
 def main() -> None:
-    for line in sys.stdin:
+    # Electron 的 child.stdin 固定写 UTF-8；从二进制管道自行解码，不能依赖
+    # Windows/PyInstaller 为 sys.stdin 选择的区域编码。
+    input_stream = getattr(sys.stdin, "buffer", sys.stdin)
+    for raw_line in input_stream:
+        line = raw_line.decode("utf-8-sig") if isinstance(raw_line, bytes) else raw_line
         line = line.strip()
         if not line:
             continue
