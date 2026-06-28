@@ -64,6 +64,315 @@ function initAdmin() {
         script: $('#scriptModelResult'),
     };
     const quotaForm = $('#quotaForm');
+    const softwareConfigList = $('#softwareConfigList');
+    const softwareConfigResult = $('#softwareConfigResult');
+    const softwareReleaseForm = $('#softwareReleaseForm');
+    const softwareReleasesTable = $('#softwareReleasesTable');
+    let softwareConfigs = [];
+    let softwareProviders = [];
+    let softwareReleases = [];
+
+    function providerOptions(selected) {
+        const known = softwareProviders.length ? softwareProviders : [
+            {code: 'aliyun', name: '阿里云百炼 / Qwen'},
+            {code: 'deepseek', name: 'DeepSeek'},
+            {code: 'openai-compatible', name: 'OpenAI Compatible'},
+        ];
+        return known.map(p => `<option value="${escapeHtml(p.code)}"${p.code === selected ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+    }
+
+    function renderSoftwareConfigs() {
+        if (!softwareConfigList) return;
+        const legacySlots = new Set(['auto:script', 'pic:image_repair', 'pic:image_detect', 'platform:vision']);
+        const visibleConfigs = softwareConfigs
+            .filter(config => !legacySlots.has(`${config.software_code}:${config.purpose}`))
+            .sort((a, b) => {
+                if (a.purpose === 'assistant_chat') return -1;
+                if (b.purpose === 'assistant_chat') return 1;
+                return Number(a.id || 0) - Number(b.id || 0);
+            });
+        if (!visibleConfigs.length) {
+            softwareConfigList.innerHTML = '<div class="panel muted">还没有新增 AI 功能配置，点击右上角按钮创建。</div>';
+            return;
+        }
+        const uniqueModels = Array.from(new Map(softwareConfigs
+            .filter(config => config.model)
+            .map(config => [config.model, config])).values());
+        const enabledCount = softwareConfigs.filter(config => config.enabled).length;
+        const failedCount = softwareConfigs.filter(config => config.last_test_status === 'failed').length;
+        const quickTestConfigs = softwareConfigs.filter(config => config.id && config.settings?.api_mode !== 'image_generation');
+        const dashboard = `
+            <div class="ai-overview-grid">
+                <div><span class="overview-icon green">◇</span><p>已接入模型<strong>${uniqueModels.length}</strong></p></div>
+                <div><span class="overview-icon blue">⌘</span><p>AI 功能<strong>${softwareConfigs.length}</strong></p></div>
+                <div><span class="overview-icon cyan">●</span><p>运行中功能<strong>${enabledCount}</strong></p></div>
+                <div><span class="overview-icon red">!</span><p>异常配置<strong>${failedCount}</strong></p></div>
+            </div>
+            <div class="ai-dashboard-grid">
+                <section class="ai-dashboard-panel model-service-panel">
+                    <header><div><h3>模型服务</h3><span>统一查看当前接入的模型</span></div></header>
+                    <div class="ai-table-wrap"><table class="ai-config-table">
+                        <thead><tr><th>模型信息</th><th>提供商</th><th>模型 ID</th><th>状态</th><th>功能数</th></tr></thead>
+                        <tbody>${uniqueModels.map(config => {
+                            const uses = softwareConfigs.filter(item => item.model === config.model).length;
+                            const isImage = config.settings?.api_mode === 'image_generation' || /image|scene|repair/.test(config.purpose || '');
+                            return `<tr>
+                                <td><span class="model-row-icon ${isImage ? 'image' : 'text'}">${isImage ? '图' : '文'}</span><strong>${escapeHtml(config.model)}</strong></td>
+                                <td>${escapeHtml(config.provider || 'aliyun')}</td>
+                                <td><code>${escapeHtml(config.model)}</code></td>
+                                <td><span class="table-status ${config.enabled ? 'on' : 'off'}"><i></i>${config.enabled ? '运行中' : '停用'}</span></td>
+                                <td>${uses} 项</td>
+                            </tr>`;
+                        }).join('')}</tbody>
+                    </table></div>
+                </section>
+                <section class="ai-dashboard-panel quick-test-panel">
+                    <header><div><h3>连接测试</h3><span>选择功能并验证模型连接</span></div></header>
+                    <label>AI 功能<select id="quickTestConfig">${quickTestConfigs.map(config => `<option value="${config.id}">${escapeHtml(config.feature_name || config.purpose)} · ${escapeHtml(config.model)}</option>`).join('')}</select></label>
+                    <div class="quick-endpoint"><span>API Key</span><strong>服务器安全托管</strong></div>
+                    <div class="quick-endpoint"><span>Endpoint</span><code>${escapeHtml(quickTestConfigs[0]?.base_url || '未配置')}</code></div>
+                    <button class="btn quick-test-button" type="button" data-quick-test>测试连接</button>
+                    <div class="quick-test-result" id="quickTestResult"><i></i><span>等待测试</span></div>
+                </section>
+            </div>
+            <section class="ai-dashboard-panel binding-panel">
+                <header><div><h3>功能绑定</h3><span>每个 AI 功能独立选择模型和运行参数</span></div></header>
+                <div class="ai-table-wrap"><table class="ai-config-table">
+                    <thead><tr><th>AI 功能</th><th>软件</th><th>调用模型</th><th>运行参数</th><th>状态</th><th>操作</th></tr></thead>
+                    <tbody>${softwareConfigs.map(config => `<tr>
+                        <td><strong>${escapeHtml(config.feature_name || config.purpose)}</strong><small>${escapeHtml(config.purpose)}</small></td>
+                        <td>${escapeHtml(config.software_name || config.software_code)}</td>
+                        <td><code>${escapeHtml(config.model || '未配置')}</code></td>
+                        <td>温度 ${config.temperature ?? 0.2} · ${config.max_tokens || 0} tokens</td>
+                        <td><span class="table-status ${config.enabled ? 'on' : 'off'}"><i></i>${config.enabled ? '已启用' : '未启用'}</span></td>
+                        <td><button class="table-edit-btn" type="button" data-config-open="${config.id}">编辑</button></td>
+                    </tr>`).join('')}</tbody>
+                </table></div>
+            </section>`;
+
+        const editors = softwareConfigs.map(config => {
+            const status = config.last_test_status === 'success' ? '测试通过'
+                : (config.last_test_status === 'failed' ? '测试失败' : '未测试');
+            const apiMode = config.settings?.api_mode || 'chat';
+            const isDraft = !config.id;
+            const isAssistant = config.purpose === 'assistant_chat';
+            const icon = isAssistant ? '秘' : (config.purpose === 'document_recognize' ? '识' : 'AI');
+            const statusClass = config.last_test_status === 'success' ? 'success'
+                : (config.last_test_status === 'failed' ? 'failed' : 'idle');
+            return `
+                <details class="ai-config-editor" id="ai-config-editor-${config.id || 'draft'}" ${isDraft ? 'open' : ''}>
+                    <summary><span><strong>${isAssistant ? 'AI 资料秘书' : escapeHtml(config.feature_name || '新 AI 功能')}</strong><small>${escapeHtml(config.model || '未配置模型')} · 点击展开详细配置</small></span><em>编辑</em></summary>
+                <section class="ai-config-card${config.enabled ? '' : ' is-disabled'}">
+                    <header class="ai-config-head">
+                        <span class="ai-config-icon">${icon}</span>
+                        <div class="ai-config-title">
+                            <div class="ai-config-kicker">${escapeHtml(config.software_name || '新软件')} · ${escapeHtml(config.software_code || 'software')}</div>
+                            <h3>${isAssistant ? 'AI 资料秘书' : escapeHtml(config.feature_name || '新 AI 功能')}</h3>
+                            <code>${escapeHtml(config.purpose || 'feature_code')}</code>
+                        </div>
+                        <div class="ai-config-state">
+                            <span class="model-badge">${escapeHtml(config.model || '未配置模型')}</span>
+                            <span class="status-badge ${statusClass}"><i></i>${status}</span>
+                        </div>
+                    </header>
+                    <form class="form software-config-form" data-config-id="${config.id || ''}">
+                        <input type="hidden" name="id" value="${config.id || ''}">
+                        ${isDraft ? `
+                            <section class="ai-config-block identity-block">
+                                <div class="ai-block-head"><div><strong>功能标识</strong><span>保存后代码不可随意修改</span></div></div>
+                                <div class="form-grid-2">
+                                    <label>软件代码<input name="software_code" required maxlength="40" value="${escapeHtml(config.software_code || '')}" placeholder="例如：aidoc"></label>
+                                    <label>功能代码<input name="purpose" required maxlength="30" value="${escapeHtml(config.purpose || '')}" placeholder="例如：assistant_chat"></label>
+                                </div>
+                            </section>` : `
+                            <input type="hidden" name="software_code" value="${escapeHtml(config.software_code || '')}">
+                            <input type="hidden" name="purpose" value="${escapeHtml(config.purpose || '')}">`}
+
+                        <div class="ai-config-columns">
+                            <section class="ai-config-block">
+                                <div class="ai-block-head"><div><strong>模型连接</strong><span>选择供应商和实际调用模型</span></div></div>
+                                <div class="form-grid-2 compact-fields">
+                                    <label>软件名称<input name="software_name" required maxlength="100" value="${escapeHtml(config.software_name || '')}" placeholder="例如：AI 文档管理"></label>
+                                    <label>功能名称<input name="feature_name" required maxlength="100" value="${escapeHtml(isAssistant ? 'AI 资料秘书' : (config.feature_name || ''))}" placeholder="例如：AI 资料秘书"></label>
+                                    <label>供应商<select name="provider">${providerOptions(config.provider || 'aliyun')}</select></label>
+                                    <label>模型名称<input name="model" list="aliyunModelPresets" required value="${escapeHtml(config.model || '')}" placeholder="qwen-plus"></label>
+                                </div>
+                                <label>Base URL<input name="base_url" type="url" required value="${escapeHtml(config.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1')}"></label>
+                                <label>独立 API Key
+                                    <input name="api_key" type="password" autocomplete="new-password" placeholder="${config.has_api_key ? '已单独保存；留空表示不修改' : '留空则复用服务器 DASHSCOPE_API_KEY'}">
+                                    <small class="field-hint">${config.has_api_key ? '当前使用此功能单独保存的 Key' : '当前使用宝塔服务器环境变量中的 Key'}</small>
+                                </label>
+                            </section>
+
+                            <section class="ai-config-block runtime-block">
+                                <div class="ai-block-head"><div><strong>运行参数</strong><span>控制输出长度、随机度和超时</span></div></div>
+                                <div class="parameter-grid">
+                                    <label><span>随机度</span><input name="temperature" type="number" min="0" max="2" step="0.05" value="${config.temperature ?? 0.2}"><small>Temperature</small></label>
+                                    <label><span>输出上限</span><input name="max_tokens" type="number" min="128" max="128000" value="${config.max_tokens ?? 3000}"><small>Max Tokens</small></label>
+                                    <label><span>请求超时</span><input name="request_timeout" type="number" min="10" max="900" value="${config.request_timeout ?? 120}"><small>秒</small></label>
+                                </div>
+                                <label>推理强度
+                                    <select name="reasoning_effort">
+                                        ${['low', 'medium', 'high'].map(v => `<option value="${v}"${v === (config.reasoning_effort || 'medium') ? ' selected' : ''}>${v}</option>`).join('')}
+                                    </select>
+                                </label>
+                                <div class="config-switch-list">
+                                    <label><span><strong>启用功能</strong><small>关闭后停止该 AI 功能</small></span><input name="enabled" type="checkbox"${config.enabled !== false ? ' checked' : ''}></label>
+                                    <label><span><strong>Thinking 推理</strong><small>复杂任务可开启，响应会更慢</small></span><input name="thinking_enabled" type="checkbox"${config.thinking_enabled ? ' checked' : ''}></label>
+                                </div>
+                            </section>
+                        </div>
+
+                        <details class="prompt-editor" ${isAssistant ? 'open' : ''}>
+                            <summary>
+                                <span><strong>提示词与业务知识库</strong><small>定义这个 AI 的职责、输出格式和专业知识</small></span>
+                                <em>展开编辑</em>
+                            </summary>
+                            <div class="prompt-editor-body">
+                                <label>系统提示词<textarea name="system_prompt" rows="9" placeholder="该功能的角色、工作规则和输出格式">${escapeHtml(config.system_prompt || '')}</textarea></label>
+                                <label>业务知识库<textarea name="knowledge_base" rows="9" placeholder="可填 JSON 或普通文本，例如“办事事项 → 所需材料清单”">${escapeHtml(config.knowledge_base || '')}</textarea></label>
+                            </div>
+                        </details>
+
+                        <footer class="ai-config-actions">
+                            <div class="config-effective"><i></i><span>保存后服务器下一次调用立即生效，无需重新发布软件</span></div>
+                            <div class="button-row">
+                                <button class="btn btn-outline danger" type="button" data-software-delete="${config.id || 'draft'}">${isDraft ? '取消' : '删除'}</button>
+                                <button class="btn btn-outline" type="button" data-software-test="${config.id || ''}"${isDraft || apiMode === 'image_generation' ? ' disabled' : ''}>测试连接</button>
+                                <button class="btn" type="submit">保存配置</button>
+                            </div>
+                        </footer>
+                        <pre class="result-box software-feature-result ai-config-result">${config.last_test_message ? escapeHtml(`${status}：${config.last_test_message}`) : ''}</pre>
+                    </form>
+                </section>
+                </details>`;
+        }).join('');
+        softwareConfigList.innerHTML = dashboard + `<div class="ai-config-editors"><h3>详细配置</h3>${editors}</div>`;
+    }
+
+    async function loadSoftwareConfigs() {
+        if (!softwareConfigList) return;
+        try {
+            const response = await api('/api/admin/software-configs');
+            softwareConfigs = response.configs || [];
+            softwareProviders = response.providers || [];
+            renderSoftwareConfigs();
+        } catch (error) {
+            softwareConfigList.innerHTML = `<div class="panel result-box">读取失败：${escapeHtml(error.message)}</div>`;
+        }
+    }
+
+    $('#addSoftwareConfigBtn')?.addEventListener('click', () => {
+        softwareConfigs.unshift({
+            id: null,
+            software_code: 'new-software',
+            software_name: '新软件',
+            purpose: 'new_feature',
+            feature_name: '新 AI 功能',
+            provider: 'aliyun',
+            base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            model: 'qwen-plus',
+            enabled: true,
+            temperature: 0.2,
+            max_tokens: 3000,
+            request_timeout: 120,
+            reasoning_effort: 'medium',
+        });
+        renderSoftwareConfigs();
+        softwareConfigList?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+
+    softwareConfigList?.addEventListener('submit', async event => {
+        const form = event.target.closest('.software-config-form');
+        if (!form) return;
+        event.preventDefault();
+        const result = form.querySelector('.software-feature-result');
+        setText(result, '保存中…');
+        try {
+            const data = formToObject(form);
+            if (!data.id) delete data.id;
+            else data.id = Number(data.id);
+            data.enabled = form.enabled.checked;
+            data.thinking_enabled = form.thinking_enabled.checked;
+            for (const key of ['temperature', 'max_tokens', 'request_timeout']) data[key] = Number(data[key]);
+            const response = await api('/api/admin/software-configs', {method: 'POST', body: data});
+            setText(result, `已保存：${response.config.software_name} / ${response.config.feature_name}`);
+            await loadSoftwareConfigs();
+        } catch (error) {
+            setText(result, error.message);
+        }
+    });
+
+    softwareConfigList?.addEventListener('click', async event => {
+        const openBtn = event.target.closest('[data-config-open]');
+        if (openBtn) {
+            const editor = document.getElementById(`ai-config-editor-${openBtn.dataset.configOpen}`);
+            if (editor) {
+                editor.open = true;
+                editor.scrollIntoView({behavior: 'smooth', block: 'start'});
+            }
+            return;
+        }
+        const quickBtn = event.target.closest('[data-quick-test]');
+        if (quickBtn) {
+            const id = $('#quickTestConfig')?.value;
+            const result = $('#quickTestResult');
+            if (!id || !result) return;
+            result.className = 'quick-test-result loading';
+            result.innerHTML = '<i></i><span>正在连接模型…</span>';
+            quickBtn.disabled = true;
+            try {
+                const response = await api(`/api/admin/software-configs/${id}/test`, {method: 'POST', body: {}});
+                result.className = 'quick-test-result success';
+                result.innerHTML = `<i></i><span>连接正常：${escapeHtml(response.message || '测试通过')}</span>`;
+            } catch (error) {
+                result.className = 'quick-test-result failed';
+                result.innerHTML = `<i></i><span>${escapeHtml(error.message)}</span>`;
+            } finally {
+                quickBtn.disabled = false;
+            }
+            return;
+        }
+        const testBtn = event.target.closest('[data-software-test]');
+        if (testBtn && testBtn.dataset.softwareTest) {
+            const result = testBtn.closest('form')?.querySelector('.software-feature-result');
+            setText(result, '测试中…');
+            testBtn.disabled = true;
+            try {
+                const response = await api(`/api/admin/software-configs/${testBtn.dataset.softwareTest}/test`, {method: 'POST', body: {}});
+                setText(result, `测试通过：${response.message}`);
+                await loadSoftwareConfigs();
+            } catch (error) {
+                setText(result, error.message);
+            } finally {
+                testBtn.disabled = false;
+            }
+            return;
+        }
+        const deleteBtn = event.target.closest('[data-software-delete]');
+        if (!deleteBtn) return;
+        const id = deleteBtn.dataset.softwareDelete;
+        if (id === 'draft') {
+            softwareConfigs = softwareConfigs.filter(config => config.id);
+            renderSoftwareConfigs();
+            return;
+        }
+        if (!window.confirm('确定删除这项软件 AI 配置吗？对应功能会回退到代码默认值或停止可用。')) return;
+        try {
+            await api(`/api/admin/software-configs/${id}`, {method: 'DELETE'});
+            await loadSoftwareConfigs();
+        } catch (error) {
+            setText(softwareConfigResult, error.message);
+            softwareConfigResult?.classList.remove('hidden');
+        }
+    });
+
+    softwareConfigList?.addEventListener('change', event => {
+        if (event.target.name !== 'provider') return;
+        const form = event.target.closest('form');
+        const provider = softwareProviders.find(p => p.code === event.target.value);
+        if (provider?.base_url && form?.base_url) form.base_url.value = provider.base_url;
+    });
 
     // ── 登录 ──
     loginForm?.addEventListener('submit', async event => {
@@ -85,6 +394,84 @@ function initAdmin() {
         try { await api('/api/admin/logout', {method: 'POST'}); } catch (e) { console.warn(e); }
         localStorage.removeItem(adminTokenKey);
         showAdmin(false);
+    });
+
+    $('#releasePreset')?.addEventListener('change', event => {
+        if (!softwareReleaseForm) return;
+        const option = event.currentTarget.selectedOptions[0];
+        if (!option || option.value === 'custom') return;
+        softwareReleaseForm.elements.software_code.value = option.value;
+        softwareReleaseForm.elements.software_name.value = option.dataset.name || '';
+    });
+
+    softwareReleaseForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const submit = $('#softwareReleaseSubmit');
+        const result = $('#softwareReleaseResult');
+        const progress = $('#releaseUploadProgress');
+        const bar = $('#releaseProgressBar');
+        const percent = $('#releaseProgressPercent');
+        const progressText = $('#releaseProgressText');
+        const formData = new FormData(softwareReleaseForm);
+        formData.set('enabled', softwareReleaseForm.elements.enabled.checked ? '1' : '0');
+
+        submit.disabled = true;
+        progress.classList.remove('hidden');
+        result.classList.add('hidden');
+        bar.value = 0;
+        percent.textContent = '0%';
+        progressText.textContent = '正在上传安装包…';
+
+        try {
+            const response = await uploadAdminPackage(formData, value => {
+                const rounded = Math.min(100, Math.max(0, Math.round(value)));
+                bar.value = rounded;
+                percent.textContent = `${rounded}%`;
+                progressText.textContent = rounded >= 100 ? '服务器正在校验并保存…' : '正在上传安装包…';
+            });
+            result.className = 'release-result success';
+            result.textContent = `上传成功：${response.release.software_name} V${response.release.version}（${response.release.file_size_text}）`;
+            softwareReleaseForm.elements.package.value = '';
+            softwareReleaseForm.elements.release_notes.value = '';
+            await loadSoftwareReleases();
+        } catch (error) {
+            result.className = 'release-result error';
+            result.textContent = `上传失败：${error.message}`;
+        } finally {
+            submit.disabled = false;
+            progress.classList.add('hidden');
+        }
+    });
+
+    $('#softwareReleasesRefresh')?.addEventListener('click', loadSoftwareReleases);
+
+    softwareReleasesTable?.addEventListener('click', async event => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const id = Number(button.dataset.releaseActivate || button.dataset.releaseDisable || button.dataset.releaseDelete || button.dataset.releaseCopy);
+        const release = softwareReleases.find(item => item.id === id);
+        if (!release) return;
+
+        try {
+            if (button.dataset.releaseCopy) {
+                await navigator.clipboard.writeText(new URL(release.download_url, window.location.origin).href);
+                button.textContent = '已复制';
+                setTimeout(() => { button.textContent = '复制链接'; }, 1200);
+                return;
+            }
+
+            if (button.dataset.releaseDelete) {
+                if (!confirm(`确定永久删除「${release.software_name} V${release.version}」吗？\n\n安装包文件也会从服务器删除，无法恢复。`)) return;
+                await api(`/api/admin/software-releases/${id}`, {method: 'DELETE'});
+            } else if (button.dataset.releaseActivate) {
+                await api(`/api/admin/software-releases/${id}/activate`, {method: 'POST', body: {}});
+            } else if (button.dataset.releaseDisable) {
+                await api(`/api/admin/software-releases/${id}/disable`, {method: 'POST', body: {}});
+            }
+            await loadSoftwareReleases();
+        } catch (error) {
+            alert(error.message);
+        }
     });
 
     // ── 侧边栏导航 ──
@@ -286,9 +673,9 @@ function initAdmin() {
             await api('/api/admin/me');
             showAdmin(true);
             await Promise.all([
-                loadStats(), loadModel(), loadImageModel(), loadUsers(),
+                loadStats(), loadModel(), loadImageModel(), loadSoftwareConfigs(), loadUsers(),
                 loadJobs(), loadOrders(), loadFeedback(),
-                loadPatterns(), loadAnnouncements()
+                loadPatterns(), loadAnnouncements(), loadSoftwareReleases()
             ]);
         } catch (error) {
             localStorage.removeItem(adminTokenKey);
@@ -331,6 +718,80 @@ function initAdmin() {
         } else {
             badge.classList.add('hidden');
         }
+    }
+
+    async function loadSoftwareReleases() {
+        if (!softwareReleasesTable) return;
+        try {
+            const response = await api('/api/admin/software-releases');
+            softwareReleases = response.items || [];
+            renderSoftwareReleases();
+        } catch (error) {
+            softwareReleasesTable.innerHTML = `<tr><td colspan="7" class="empty" style="color:#dc2626">加载失败：${escapeHtml(error.message)}</td></tr>`;
+        }
+    }
+
+    function renderSoftwareReleases() {
+        if (!softwareReleasesTable) return;
+        if (!softwareReleases.length) {
+            softwareReleasesTable.innerHTML = '<tr><td colspan="7" class="empty">还没有上传安装包</td></tr>';
+            return;
+        }
+
+        softwareReleasesTable.innerHTML = softwareReleases.map(release => {
+            const status = release.enabled
+                ? '<span class="release-status current"><i></i>当前版本</span>'
+                : '<span class="release-status archived"><i></i>历史版本</span>';
+            const primaryAction = release.enabled
+                ? `<button class="release-action" type="button" data-release-disable="${release.id}">停止发布</button>`
+                : `<button class="release-action primary" type="button" data-release-activate="${release.id}">设为当前版</button>`;
+            const downloadActions = release.enabled
+                ? `<a class="release-action" href="${escapeHtml(release.download_url)}">下载</a><button class="release-action" type="button" data-release-copy="${release.id}">复制链接</button>`
+                : '';
+
+            return `<tr>
+                <td>${status}</td>
+                <td><strong>${escapeHtml(release.software_name)}</strong><small>V${escapeHtml(release.version)} · ${escapeHtml(platformName(release.platform))}</small></td>
+                <td><span class="release-file-name" title="${escapeHtml(release.file_name)}">${escapeHtml(release.file_name)}</span><small>${escapeHtml(release.file_size_text)}</small></td>
+                <td><code class="release-hash" title="${escapeHtml(release.sha256)}">${escapeHtml(release.sha256.slice(0, 12))}…</code></td>
+                <td>${release.downloads_count || 0}</td>
+                <td>${formatTime(release.published_at || release.created_at)}</td>
+                <td><div class="release-actions">${primaryAction}${downloadActions}<button class="release-action danger" type="button" data-release-delete="${release.id}">删除</button></div></td>
+            </tr>`;
+        }).join('');
+    }
+
+    function platformName(platform) {
+        return ({
+            'windows-x64': 'Windows 64 位',
+            'windows-arm64': 'Windows ARM64',
+            macos: 'macOS',
+            linux: 'Linux',
+        })[platform] || platform;
+    }
+
+    function uploadAdminPackage(formData, onProgress) {
+        return new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open('POST', '/api/admin/software-releases');
+            const token = localStorage.getItem(adminTokenKey);
+            if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
+            request.responseType = 'json';
+            request.upload.addEventListener('progress', event => {
+                if (event.lengthComputable) onProgress(event.loaded / event.total * 100);
+            });
+            request.addEventListener('load', () => {
+                const data = request.response || {};
+                if (request.status >= 200 && request.status < 300 && data.ok !== false) {
+                    resolve(data);
+                    return;
+                }
+                reject(new Error(data.message || firstValidationMessage(data) || `请求失败：${request.status}`));
+            });
+            request.addEventListener('error', () => reject(new Error('网络连接中断，请检查服务器上传限制')));
+            request.addEventListener('abort', () => reject(new Error('上传已取消')));
+            request.send(formData);
+        });
     }
 
     async function loadImageModel() {
@@ -397,7 +858,7 @@ function initAdmin() {
         });
     }
 
-    const SOFT_NAMES = { pic: '截图/图片软件', auto: '自动化软件' };
+    const SOFT_NAMES = { aidoc: 'AI 文档管理', pic: '截图/图片软件', auto: '自动化软件' };
     let userQuery = '';
     let userSoftware = '';  // '' 全部；'_none' 未分类；其余=软件代码
 
@@ -411,7 +872,7 @@ function initAdmin() {
         if (!el) return;
         const total = Object.values(counts).reduce((a, b) => a + Number(b), 0);
         const tabs = [['', '全部', total]];
-        for (const code of ['pic', 'auto']) {
+        for (const code of ['aidoc', 'pic', 'auto']) {
             if (counts[code]) tabs.push([code, SOFT_NAMES[code], counts[code]]);
         }
         if (counts['']) tabs.push(['_none', '未分类', counts['']]);

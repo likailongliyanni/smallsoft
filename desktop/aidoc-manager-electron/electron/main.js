@@ -8,18 +8,36 @@ let backend = null
 let backendBuffer = ''
 let nextRequestId = 0
 const pending = new Map()
+let startupLogPath = ''
 
-const BACKEND_PATH = path.resolve(__dirname, '..', 'backend.py')
+function writeLog(message) {
+  try {
+    if (!startupLogPath) return
+    fs.appendFileSync(startupLogPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8')
+  } catch {}
+}
 
-function pythonCommand() {
-  if (process.env.AIDOC_PYTHON) return process.env.AIDOC_PYTHON
-  return process.platform === 'win32' ? 'python' : 'python3'
+function backendLaunch() {
+  if (app.isPackaged) {
+    const executable = process.platform === 'win32' ? 'aidoc-backend.exe' : 'aidoc-backend'
+    return {
+      command: path.join(process.resourcesPath, 'backend', executable),
+      args: [],
+      cwd: path.join(process.resourcesPath, 'backend'),
+    }
+  }
+  return {
+    command: process.env.AIDOC_PYTHON || (process.platform === 'win32' ? 'python' : 'python3'),
+    args: [path.resolve(__dirname, '..', 'backend.py')],
+    cwd: path.resolve(__dirname, '..'),
+  }
 }
 
 function startBackend() {
   if (backend) return
-  backend = spawn(pythonCommand(), [BACKEND_PATH], {
-    cwd: path.resolve(__dirname, '..'),
+  const launch = backendLaunch()
+  backend = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
     windowsHide: true,
     env: {
       ...process.env,
@@ -60,6 +78,17 @@ function startBackend() {
 
   backend.stderr.on('data', (chunk) => {
     console.error('[aidoc-backend]', chunk.toString('utf8'))
+    writeLog(`[backend stderr] ${chunk.toString('utf8').trim()}`)
+  })
+
+  backend.on('error', (error) => {
+    writeLog(`[backend spawn error] ${error.stack || error.message || error}`)
+    for (const [, waiting] of pending) {
+      clearTimeout(waiting.timer)
+      waiting.reject(new Error(`本地处理引擎启动失败：${error.message || error}`))
+    }
+    pending.clear()
+    backend = null
   })
 
   backend.on('exit', (code) => {
@@ -70,6 +99,7 @@ function startBackend() {
     pending.clear()
     backend = null
     console.error('[aidoc-backend] exited', code)
+    writeLog(`[backend exited] code=${code}`)
   })
 }
 
@@ -77,7 +107,10 @@ function callBackend(cmd, args = {}) {
   return new Promise((resolve, reject) => {
     if (!backend) return reject(new Error('本地处理进程未启动'))
     const id = ++nextRequestId
-    const timeoutMs = cmd === 'scan_folder' ? 12 * 60 * 1000 : 90 * 1000
+    // 扫描整批 12 分钟；AI 识别单份走视觉/服务器可能较久，给 5 分钟（后端调阿里云超时 300s）。
+    const timeoutMs = cmd === 'scan_folder' ? 12 * 60 * 1000
+      : cmd === 'analyze_document' ? 5 * 60 * 1000
+      : 90 * 1000
     const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id)
@@ -96,6 +129,9 @@ function createWindow() {
     minWidth: 980,
     minHeight: 680,
     title: '好办法 AI 档案管理',
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.ico')
+      : path.resolve(__dirname, '..', 'build', 'icon.png'),
     backgroundColor: '#f7f8f5',
     autoHideMenuBar: true,
     webPreferences: {
@@ -114,6 +150,12 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+  mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
+    writeLog(`[window load failed] ${code} ${description}`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    writeLog(`[renderer gone] ${JSON.stringify(details)}`)
   })
 }
 
@@ -135,6 +177,15 @@ ipcMain.handle('pickFolder', async (_event, options = {}) => {
   return result.canceled ? '' : result.filePaths[0]
 })
 
+ipcMain.handle('pickFiles', async (_event, options = {}) => {
+  const result = await dialog.showOpenDialog({
+    title: options.title || '选择要上传的文件',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm'] }],
+  })
+  return result.canceled ? [] : result.filePaths
+})
+
 ipcMain.handle('openExternalPath', async (_event, target) => {
   const value = String(target || '').trim()
   if (!value || !fs.existsSync(value)) {
@@ -150,11 +201,23 @@ ipcMain.handle('copy', (_event, text) => {
 })
 
 app.whenReady().then(() => {
+  startupLogPath = path.join(app.getPath('userData'), 'startup.log')
+  writeLog(`starting version=${app.getVersion()} packaged=${app.isPackaged} resources=${process.resourcesPath}`)
   startBackend()
   createWindow()
   app.on('activate', () => {
     if (!mainWindow) createWindow()
   })
+}).catch((error) => {
+  writeLog(`[startup error] ${error.stack || error.message || error}`)
+  app.quit()
+})
+
+process.on('uncaughtException', (error) => {
+  writeLog(`[uncaught exception] ${error.stack || error.message || error}`)
+})
+process.on('unhandledRejection', (error) => {
+  writeLog(`[unhandled rejection] ${error?.stack || error?.message || error}`)
 })
 
 app.on('window-all-closed', () => {

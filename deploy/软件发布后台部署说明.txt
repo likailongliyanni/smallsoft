@@ -1,0 +1,29 @@
+软件发布后台部署说明
+====================
+
+1. 将压缩包内文件按原目录上传并覆盖到网站根目录：
+   /www/wwwroot/tools.haobanfa.online
+
+2. 宝塔中调整 PHP 配置：
+   upload_max_filesize = 650M
+   post_max_size = 650M
+   max_execution_time = 600
+   max_input_time = 600
+
+3. 网站 Nginx 配置的 server 段增加：
+   client_max_body_size 650m;
+   client_body_timeout 600s;
+   fastcgi_read_timeout 600s;
+
+4. 在网站根目录执行：
+   php artisan migrate --force
+   php artisan optimize:clear
+   php artisan view:cache
+
+5. 确认 storage 可写：
+   chown -R www:www storage bootstrap/cache
+   chmod -R 775 storage bootstrap/cache
+
+6. 登录 /admin，进入“软件发布”，即可上传安装包。
+
+本次修改没有新增前端 npm 依赖，不需要执行 npm build。

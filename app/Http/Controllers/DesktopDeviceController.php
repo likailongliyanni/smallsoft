@@ -107,6 +107,7 @@ class DesktopDeviceController extends Controller
                 'paid' => (int) $user->paid_generations,
                 'available' => $user->availableGenerations(),
             ],
+            'billing' => $this->billingConfig((string) $user->software_code),
         ]);
     }
 
@@ -123,6 +124,7 @@ class DesktopDeviceController extends Controller
                 'paid' => (int) $user->paid_generations,
                 'available' => $user->availableGenerations(),
             ],
+            'billing' => $this->billingConfig((string) $user->software_code),
         ]);
     }
 
@@ -152,9 +154,24 @@ class DesktopDeviceController extends Controller
     {
         return match ($code) {
             'auto' => (int) config('platform.auto_default_quota', config('platform.snap_saver_default_quota', 10)),
-            'aidoc' => (int) config('platform.aidoc_default_quota', 50),
+            'aidoc' => (int) config('platform.aidoc_default_quota', 30),
             default => (int) config('platform.snap_saver_default_quota', 10),
         };
+    }
+
+    private function billingConfig(string $code): ?array
+    {
+        if ($code !== 'aidoc') {
+            return null;
+        }
+
+        return [
+            'contact_wechat' => (string) config('platform.aidoc_contact_wechat', '18033086531'),
+            'default_points' => (int) config('platform.aidoc_default_quota', 30),
+            'overdraft_limit' => (int) config('platform.aidoc_overdraft_limit', 20),
+            'packages' => array_values((array) config('platform.aidoc_point_packages', [])),
+            'rules' => array_values((array) config('platform.aidoc_billing_rules', [])),
+        ];
     }
 
     /**

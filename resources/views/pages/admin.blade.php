@@ -42,7 +42,10 @@
                     <span class="ico">📊</span> 概览
                 </a>
                 <a href="#model" class="admin-nav-item" data-tab="model">
-                    <span class="ico">🤖</span> 模型配置
+                    <span class="ico">🤖</span> 软件配置
+                </a>
+                <a href="#releases" class="admin-nav-item" data-tab="releases">
+                    <span class="ico">📦</span> 软件发布
                 </a>
                 <a href="#users" class="admin-nav-item" data-tab="users">
                     <span class="ico">👤</span> 用户管理
@@ -80,10 +83,31 @@
 
             {{-- 模型配置 --}}
             <section class="tab-pane" data-tab="model">
-                <div class="content-head">
-                    <h1>模型配置</h1>
-                    <p class="content-sub">当前生成 AI 走「阿里云全家桶」纯净版，下方测试连接。下面那套旧模型表单已废弃，仅作回切兜底。</p>
+                <div class="content-head ai-page-head">
+                    <div>
+                        <h1>AI 配置中心</h1>
+                        <p class="content-sub">统一管理模型服务、功能绑定与运行参数</p>
+                    </div>
+                    <button class="btn" id="addSoftwareConfigBtn" type="button">＋ 新增 AI 功能</button>
                 </div>
+
+                <div id="softwareConfigResult" class="result-box hidden"></div>
+                <div id="softwareConfigList" class="software-config-list">
+                    <div class="panel muted">正在读取 AI 配置中心…</div>
+                </div>
+
+                <datalist id="aliyunModelPresets">
+                    <option value="qwen-plus"></option>
+                    <option value="qwen3.6-plus"></option>
+                    <option value="qwen3.6-flash"></option>
+                    <option value="qwen3-max"></option>
+                    <option value="qwen3-coder-plus"></option>
+                    <option value="qwen-vl-max-latest"></option>
+                    <option value="wan2.7-image"></option>
+                </datalist>
+
+                <details class="legacy-configs">
+                    <summary>旧版专项配置工具（兼容保留）</summary>
 
                 {{-- 阿里云全家桶（新） --}}
                 <div class="panel" style="margin-bottom:14px;border:1px solid #16a34a">
@@ -169,6 +193,94 @@
                     <pre id="modelResult" class="result-box"></pre>
                 </div>
                 </details>
+                </details>
+            </section>
+
+            {{-- 软件安装包发布 --}}
+            <section class="tab-pane" data-tab="releases">
+                <div class="content-head release-page-head">
+                    <div>
+                        <h1>软件发布中心</h1>
+                        <p class="content-sub">上传安装包、切换当前版本并统一生成官网下载链接</p>
+                    </div>
+                    <a class="btn btn-outline" href="/download" target="_blank" rel="noopener">查看下载页</a>
+                </div>
+
+                <div class="release-admin-grid">
+                    <section class="panel release-upload-panel">
+                        <div class="release-panel-title">
+                            <span class="release-panel-icon">↑</span>
+                            <div><h3>上传新版本</h3><p>上传成功后可立即作为该软件的当前下载版本</p></div>
+                        </div>
+
+                        <form id="softwareReleaseForm" class="form" enctype="multipart/form-data">
+                            <label>快速选择软件
+                                <select id="releasePreset">
+                                    <option value="aidoc" data-name="好办法AI档案管理">好办法 AI 档案管理</option>
+                                    <option value="projetx" data-name="ProjetX 录屏">ProjetX 录屏</option>
+                                    <option value="snap-saver" data-name="智能截图软件">智能截图软件</option>
+                                    <option value="webauto" data-name="好办法浏览器自动化">好办法浏览器自动化</option>
+                                    <option value="custom" data-name="">其他软件（手动填写）</option>
+                                </select>
+                            </label>
+                            <div class="form-grid-2">
+                                <label>软件代码<input name="software_code" value="aidoc" required maxlength="60" placeholder="例如 aidoc"></label>
+                                <label>软件名称<input name="software_name" value="好办法AI档案管理" required maxlength="120"></label>
+                                <label>版本号<input name="version" value="1.0.0" required maxlength="40" placeholder="例如 1.0.1"></label>
+                                <label>适用平台
+                                    <select name="platform">
+                                        <option value="windows-x64" selected>Windows 10/11 64 位</option>
+                                        <option value="windows-arm64">Windows ARM64</option>
+                                        <option value="macos">macOS</option>
+                                        <option value="linux">Linux</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <label>安装包文件
+                                <input name="package" type="file" required accept=".exe,.msi,.zip,.rar,.7z">
+                                <small class="field-hint">支持 exe、msi、zip、rar、7z，单个文件最大 600 MB</small>
+                            </label>
+                            <label>更新说明<textarea name="release_notes" rows="4" maxlength="5000" placeholder="例如：修复图片识别、增加聊天记录保存"></textarea></label>
+                            <label class="release-current-check">
+                                <input name="enabled" type="checkbox" value="1" checked>
+                                <span><strong>上传后设为当前版本</strong><small>同一软件、同一平台的旧版本会自动停止公开下载</small></span>
+                            </label>
+                            <div id="releaseUploadProgress" class="release-progress hidden">
+                                <div><span id="releaseProgressText">准备上传…</span><strong id="releaseProgressPercent">0%</strong></div>
+                                <progress id="releaseProgressBar" max="100" value="0"></progress>
+                            </div>
+                            <button id="softwareReleaseSubmit" class="btn release-submit" type="submit">上传并发布</button>
+                            <div id="softwareReleaseResult" class="release-result hidden"></div>
+                        </form>
+                    </section>
+
+                    <aside class="panel release-guide-panel">
+                        <span class="release-guide-badge">发布流程</span>
+                        <h3>以后更新软件只需三步</h3>
+                        <ol>
+                            <li><strong>选择软件</strong><span>填写新版本号和更新说明</span></li>
+                            <li><strong>上传安装包</strong><span>服务器自动计算大小和 SHA256</span></li>
+                            <li><strong>设为当前版</strong><span>下载页立即显示新版本</span></li>
+                        </ol>
+                        <div class="release-server-note">
+                            <strong>宝塔上传限制</strong>
+                            <p>首次部署请把 PHP 的 <code>upload_max_filesize</code> 和 <code>post_max_size</code> 调整到 600M 以上，同时把 Nginx <code>client_max_body_size</code> 调整到 600M。</p>
+                        </div>
+                    </aside>
+                </div>
+
+                <section class="panel release-list-panel">
+                    <header>
+                        <div><h3>版本记录</h3><p>旧版本不会自动删除，可以随时切回</p></div>
+                        <button id="softwareReleasesRefresh" class="btn btn-sm btn-outline" type="button">刷新</button>
+                    </header>
+                    <div class="table-wrap">
+                        <table class="release-table">
+                            <thead><tr><th>状态</th><th>软件 / 版本</th><th>安装包</th><th>SHA256</th><th>下载</th><th>发布时间</th><th>操作</th></tr></thead>
+                            <tbody id="softwareReleasesTable"><tr><td colspan="7" class="empty">正在读取版本记录…</td></tr></tbody>
+                        </table>
+                    </div>
+                </section>
             </section>
 
             {{-- 用户管理 --}}

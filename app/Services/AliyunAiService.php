@@ -14,9 +14,8 @@ use Throwable;
  * 阿里云百炼 DashScope 纯净版 AI 调用服务
  *
  * 设计原则：
- *  - 不读数据库 model_configs（彻底绕过坏掉的旧逻辑）
- *  - API Key 来自 .env: DASHSCOPE_API_KEY
- *  - 模型清单硬编码在 MODELS 常量
+ *  - 默认档优先读取软件配置中心（auto/script），未配置时使用内置档位
+ *  - API Key 默认来自 .env: DASHSCOPE_API_KEY，也可在功能配置中单独保存
  *  - 默认 thinking 关闭（避免推理超时）
  *  - 提示词复用 AiScriptService::buildJsonDslPrompt（保证规则一致）
  */
@@ -77,7 +76,10 @@ class AliyunAiService
 
     public const DEFAULT_KEY = 'code';
 
-    public function __construct(private AiScriptService $scriptService) {}
+    public function __construct(
+        private AiScriptService $scriptService,
+        private SoftwareAiConfigService $softwareAi,
+    ) {}
 
     /**
      * 生成自动化脚本（核心入口）
@@ -85,7 +87,7 @@ class AliyunAiService
     public function generate(User $user, array $payload, string $modelKey = self::DEFAULT_KEY): GenerationJob
     {
         $modelKey = isset(self::MODELS[$modelKey]) ? $modelKey : self::DEFAULT_KEY;
-        $spec = self::MODELS[$modelKey];
+        $spec = $this->effectiveSpec($modelKey);
 
         $startedAt = microtime(true);
         $stepCount = count($payload['steps'] ?? []);
@@ -100,11 +102,16 @@ class AliyunAiService
         ]);
 
         try {
+            if (! empty($spec['disabled'])) {
+                throw new RuntimeException('自动化脚本生成功能已在后台停用。');
+            }
             if ($user->availableGenerations() <= 0) {
                 throw new RuntimeException('生成次数不足，请购买额度或联系管理员添加测试次数。');
             }
 
-            $apiKey = $this->apiKey();
+            $apiKey = isset($spec['_config'])
+                ? $this->softwareAi->apiKey($spec['_config'])
+                : $this->apiKey();
             if ($apiKey === '') {
                 throw new RuntimeException('服务器未配置 DASHSCOPE_API_KEY。请管理员在 .env 中配置。');
             }
@@ -114,7 +121,7 @@ class AliyunAiService
             $job->update([
                 'status' => 'completed',
                 'result_script' => $result['script'],
-                'used_provider' => 'aliyun',
+                'used_provider' => $spec['_config']->provider ?? 'aliyun',
                 'used_model' => $spec['model'],
                 'usage' => $result['usage'],
                 'duration_ms' => $this->durationMs($startedAt),
@@ -140,13 +147,16 @@ class AliyunAiService
      */
     public function listModels(): array
     {
-        return collect(self::MODELS)->map(fn ($spec, $key) => [
+        return collect(self::MODELS)->map(function ($spec, $key) {
+            $spec = $this->effectiveSpec($key);
+            return [
             'key' => $key,
             'model' => $spec['model'],
             'label' => $spec['label'],
             'desc' => $spec['desc'],
             'is_default' => $key === self::DEFAULT_KEY,
-        ])->values()->all();
+            ];
+        })->values()->all();
     }
 
     /**
@@ -154,7 +164,13 @@ class AliyunAiService
      */
     public function testKey(string $modelKey = self::DEFAULT_KEY): array
     {
-        $apiKey = $this->apiKey();
+        $spec = $this->effectiveSpec($modelKey);
+        if (! empty($spec['disabled'])) {
+            return ['ok' => false, 'message' => '自动化脚本生成功能已在后台停用。'];
+        }
+        $apiKey = isset($spec['_config'])
+            ? $this->softwareAi->apiKey($spec['_config'])
+            : $this->apiKey();
         if ($apiKey === '') {
             return [
                 'ok' => false,
@@ -162,13 +178,11 @@ class AliyunAiService
             ];
         }
 
-        $spec = self::MODELS[$modelKey] ?? self::MODELS[self::DEFAULT_KEY];
-
         try {
             $response = Http::withToken($apiKey)
                 ->timeout(30)
                 ->acceptJson()
-                ->post(self::BASE_URL.'/chat/completions', [
+                ->post($this->chatEndpoint($spec['base_url'] ?? self::BASE_URL), [
                     'model' => $spec['model'],
                     'messages' => [
                         ['role' => 'system', 'content' => '只输出 JSON。'],
@@ -211,6 +225,9 @@ class AliyunAiService
     {
         // 复用 AiScriptService 的提示词构建逻辑（保证规则一致）
         [$system, $user] = $this->scriptService->buildJsonDslPrompt($payload);
+        if (filled($spec['_config']->system_prompt ?? null)) {
+            $system = (string) $spec['_config']->system_prompt;
+        }
 
         $messages = $this->buildMessages($system, $user, $payload);
 
@@ -229,7 +246,7 @@ class AliyunAiService
         $response = Http::withToken($apiKey)
             ->timeout($spec['request_timeout'])
             ->acceptJson()
-            ->post(self::BASE_URL.'/chat/completions', $body);
+            ->post($this->chatEndpoint($spec['base_url'] ?? self::BASE_URL), $body);
 
         if (! $response->successful()) {
             // 识别阿里特定错误码，给出友好提示
@@ -345,6 +362,42 @@ class AliyunAiService
         }
 
         return $images;
+    }
+
+    private function effectiveSpec(string $modelKey): array
+    {
+        $modelKey = isset(self::MODELS[$modelKey]) ? $modelKey : self::DEFAULT_KEY;
+        $spec = self::MODELS[$modelKey];
+        $spec['base_url'] = self::BASE_URL;
+
+        // 客户端明确选择其它档位时尊重用户选择；默认档由后台统一控制。
+        if ($modelKey !== self::DEFAULT_KEY) {
+            return $spec;
+        }
+
+        $config = $this->softwareAi->find('auto', 'script', false);
+        if (! $config) {
+            return $spec;
+        }
+
+        $spec['model'] = $config->model ?: $spec['model'];
+        $spec['base_url'] = rtrim((string) ($config->base_url ?: self::BASE_URL), '/');
+        $spec['temperature'] = (float) ($config->temperature ?? $spec['temperature']);
+        $spec['max_tokens'] = (int) ($config->max_tokens ?: $spec['max_tokens']);
+        $spec['request_timeout'] = (int) ($config->request_timeout ?: $spec['request_timeout']);
+        $spec['thinking_enabled'] = (bool) $config->thinking_enabled;
+        $spec['_config'] = $config;
+        $spec['disabled'] = ! $config->enabled;
+
+        return $spec;
+    }
+
+    private function chatEndpoint(string $baseUrl): string
+    {
+        $baseUrl = rtrim($baseUrl, '/');
+        return str_ends_with($baseUrl, '/chat/completions')
+            ? $baseUrl
+            : $baseUrl.'/chat/completions';
     }
 
     private function apiKey(): string

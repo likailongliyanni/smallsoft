@@ -5,6 +5,7 @@
 *.sqlite
 *.rar
 *.zip
+deploy/*.exe
 
 node_modules/
 vendor/
@@ -48,6 +49,11 @@ desktop/snap-saver/存图结果/
 *.pyc
 desktop/**/dist/
 desktop/**/build/
+desktop/aidoc-manager-electron/release/
+desktop/aidoc-manager-electron/distribution/
+desktop/aidoc-manager-electron/final-installer/
+desktop/aidoc-manager-electron/installer/
+desktop/aidoc-manager-electron/package-output/
 desktop/**/dist_nuitka/
 desktop/**/main.build/
 desktop/**/main.dist/

@@ -32,6 +32,10 @@ DOCUMENT_TYPES = {
     "food_license": "食品许可证",
     "contract": "合同/协议",
     "tax_certificate": "税务/开户资料",
+    "identity_card": "居民身份证",
+    "household_register": "户口簿/常住人口登记卡",
+    "graduation_certificate": "毕业证书",
+    "degree_certificate": "学位证书",
     "other": "其他资料",
 }
 
@@ -113,6 +117,44 @@ FIELD_PROFILES: dict[str, list[dict[str, str]]] = {
         {"label": "有效期起", "source": "issued_at"},
         {"label": "有效期止", "source": "expires_at"},
     ],
+    "identity_card": [
+        {"label": "姓名", "source": "extra:person_name"},
+        {"label": "性别", "source": "extra:sex"},
+        {"label": "民族", "source": "extra:nation"},
+        {"label": "出生日期", "source": "extra:birth_date"},
+        {"label": "公民身份号码", "source": "certificate_no"},
+        {"label": "住址", "source": "extra:address"},
+        {"label": "签发机关", "source": "issuer"},
+        {"label": "有效期起", "source": "issued_at"},
+        {"label": "有效期止", "source": "expires_at"},
+    ],
+    "household_register": [
+        {"label": "姓名", "source": "extra:person_name"},
+        {"label": "与户主关系", "source": "extra:relationship"},
+        {"label": "性别", "source": "extra:sex"},
+        {"label": "民族", "source": "extra:nation"},
+        {"label": "出生日期", "source": "extra:birth_date"},
+        {"label": "公民身份号码", "source": "certificate_no"},
+        {"label": "籍贯", "source": "extra:native_place"},
+        {"label": "住址", "source": "extra:address"},
+    ],
+    "graduation_certificate": [
+        {"label": "姓名", "source": "extra:person_name"},
+        {"label": "学校", "source": "issuer"},
+        {"label": "专业", "source": "extra:major"},
+        {"label": "学历层次", "source": "extra:education_level"},
+        {"label": "学习形式", "source": "extra:study_type"},
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "毕业日期", "source": "issued_at"},
+    ],
+    "degree_certificate": [
+        {"label": "姓名", "source": "extra:person_name"},
+        {"label": "学校", "source": "issuer"},
+        {"label": "专业", "source": "extra:major"},
+        {"label": "学位", "source": "extra:degree"},
+        {"label": "证书编号", "source": "certificate_no"},
+        {"label": "授予日期", "source": "issued_at"},
+    ],
 }
 
 # 版面样式未细化的类型（条码证/卫生许可证/生产许可证/产品备案/食品许可证/税务/其他）走通用字段。
@@ -140,6 +182,33 @@ EXTRA_FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
         {"key": "party_c", "label": "丙方", "type": "text"},
         {"key": "contract_type", "label": "类型", "type": "text"},
     ],
+    "identity_card": [
+        {"key": "person_name", "label": "姓名", "type": "text"},
+        {"key": "sex", "label": "性别", "type": "text"},
+        {"key": "nation", "label": "民族", "type": "text"},
+        {"key": "birth_date", "label": "出生日期", "type": "date"},
+        {"key": "address", "label": "住址", "type": "text"},
+    ],
+    "household_register": [
+        {"key": "person_name", "label": "姓名", "type": "text"},
+        {"key": "relationship", "label": "与户主关系", "type": "text"},
+        {"key": "sex", "label": "性别", "type": "text"},
+        {"key": "nation", "label": "民族", "type": "text"},
+        {"key": "birth_date", "label": "出生日期", "type": "date"},
+        {"key": "native_place", "label": "籍贯", "type": "text"},
+        {"key": "address", "label": "住址", "type": "text"},
+    ],
+    "graduation_certificate": [
+        {"key": "person_name", "label": "姓名", "type": "text"},
+        {"key": "major", "label": "专业", "type": "text"},
+        {"key": "education_level", "label": "学历层次", "type": "text"},
+        {"key": "study_type", "label": "学习形式", "type": "text"},
+    ],
+    "degree_certificate": [
+        {"key": "person_name", "label": "姓名", "type": "text"},
+        {"key": "major", "label": "专业", "type": "text"},
+        {"key": "degree", "label": "学位", "type": "text"},
+    ],
 }
 
 # 规则层类型判断关键词（命中越多越靠前）
@@ -156,6 +225,10 @@ TYPE_KEYWORDS: dict[str, list[str]] = {
     "food_license": ["食品经营许可证", "食品生产许可证", "SC", "食品许可"],
     "contract": ["合同", "协议", "甲方", "乙方", "采购"],
     "tax_certificate": ["开户许可证", "纳税人", "银行账号", "税务登记"],
+    "identity_card": ["居民身份证", "公民身份号码", "签发机关", "有效期限"],
+    "household_register": ["常住人口登记卡", "居民户口簿", "户主或与户主关系", "何时由何地迁来本市"],
+    "graduation_certificate": ["毕业证书", "普通高等学校", "修完教学计划规定的全部课程", "准予毕业"],
+    "degree_certificate": ["学位证书", "学位条例", "授予", "学士学位", "硕士学位", "博士学位"],
 }
 
 
@@ -163,7 +236,7 @@ def extraction_instruction() -> str:
     """识别提示词（字段对齐「版面样式.xlsx」）。"""
     types = "，".join(f"{k}={v}" for k, v in DOCUMENT_TYPES.items())
     return (
-        "你是供应商资料库的文档管理员。请判断证件类型并提取结构化字段，只输出 JSON，不要解释、不要 Markdown。\n\n"
+        "你是企业及人员资料库的文档管理员。图片可能横置或倒置，请先按文字方向理解画面，再判断证件类型并提取结构化字段；若看到内容相同但方向不同的图片，它们是同一张照片的方向候选，只识别一次。只输出 JSON，不要解释、不要 Markdown。\n\n"
         f"可选资料类型(document_type 取等号左边的代码)：{types}\n\n"
         "统一顶层字段（所有类型都尽量填）：\n"
         "- company_name 归属公司：营业执照填公司名称；合同填甲方；商标证/质检/3C 填归属公司/注册人；授权书填授权方。\n"
@@ -175,7 +248,11 @@ def extraction_instruction() -> str:
         "各类型专属字段放进 extra_fields（对象，只填下面列出的 key，没有就不填）：\n"
         "- business_license 营业执照：registered_capital(注册金)、legal_representative(法人)、address(地址)。\n"
         "- contract 合同：party_c(丙方)、contract_type(合同类型，如采购/服务/代理)。\n"
-        "- 其它类型 extra_fields 留空对象 {}。\n\n"
+        "- identity_card 居民身份证：person_name(姓名)、sex(性别)、nation(民族)、birth_date(出生日期)、address(住址)；certificate_no 填公民身份号码，issuer 填签发机关，有效期限填 issued_at/expires_at。身份证正面或背面都归此类型。\n"
+        "- household_register 户口簿/常住人口登记卡：person_name(姓名)、relationship(与户主关系)、sex(性别)、nation(民族)、birth_date(出生日期)、native_place(籍贯)、address(住址)；certificate_no 填公民身份号码。\n"
+        "- graduation_certificate 毕业证书：person_name(姓名)、major(专业)、education_level(学历层次)、study_type(学习形式)；issuer 填学校，certificate_no 填证书编号，issued_at 填毕业日期。\n"
+        "- degree_certificate 学位证书：person_name(姓名)、major(专业)、degree(学位名称)；issuer 填学校，certificate_no 填证书编号，issued_at 填授予日期。\n"
+        "- 其它类型 extra_fields 留空对象 {}。个人证件的 company_name、brand、applicable_scope 无对应内容时留空，不要把姓名硬填进公司名称。\n\n"
         "日期一律 YYYY-MM-DD。识别不出的字段填空字符串。ai_confidence 是 0-100 的整数。\n"
         "返回 JSON：{document_type, company_name, brand, certificate_no, issuer, issued_at, expires_at, applicable_scope, extra_fields, tags, ai_summary, ai_confidence}"
     )
@@ -216,8 +293,9 @@ def extract_text(path: Path) -> str:
     return ""
 
 
-def render_pages_png(path: Path, max_pages: int = 2, dpi: int = 150) -> list[bytes]:
-    """把 PDF 前几页或图片渲染成 PNG 字节，喂视觉 AI。"""
+def render_pages_png(path: Path, max_pages: int = 2, dpi: int = 200) -> list[bytes]:
+    """把 PDF 前几页或图片渲染成 PNG 字节，喂视觉 AI（仅扫描件无文字层时才用）。
+    DPI 提到 200，扫描件文字更清晰、识别更准；不增加按页扣费。"""
     suffix = path.suffix.lower()
     out: list[bytes] = []
     try:
@@ -227,20 +305,33 @@ def render_pages_png(path: Path, max_pages: int = 2, dpi: int = 150) -> list[byt
             zoom = dpi / 72.0
             matrix = fitz.Matrix(zoom, zoom)
             for page in doc[:max_pages]:
-                out.append(page.get_pixmap(matrix=matrix).tobytes("png"))
+                # JPEG 而非 PNG：文档页 JPEG 体积约为 PNG 的 1/5，上传快得多、不易超时，
+                # 质量 85 对文字识别足够清晰。
+                out.append(page.get_pixmap(matrix=matrix).tobytes("jpg", jpg_quality=85))
             doc.close()
         elif suffix in IMAGE_EXTS:
-            from PIL import Image
+            from PIL import Image, ImageOps
             with Image.open(path) as im:
-                im = im.convert("RGB")
-                # 控制尺寸，长边压到 1600，省流量
-                long_side = max(im.size)
-                if long_side > 1600:
-                    scale = 1600 / long_side
-                    im = im.resize((round(im.width * scale), round(im.height * scale)))
-                buf = io.BytesIO()
-                im.save(buf, "PNG")
-                out.append(buf.getvalue())
+                # 有些手机/聊天软件只用 EXIF 记录旋转，也有一些转存文件的 EXIF
+                # 本身就是错的。保留原像素，并在存在旋转标记时再附一张自动纠正图，
+                # 让视觉模型选择文字正向的一张，避免把本来正确的照片强行转歪。
+                orientation = int(im.getexif().get(274, 1) or 1)
+                candidates = [im.convert("RGB")]
+                if orientation in {3, 6, 8}:
+                    corrected = ImageOps.exif_transpose(im).convert("RGB")
+                    candidates.append(corrected)
+
+                for candidate in candidates:
+                    # 控制尺寸，长边压到 2000，省流量
+                    long_side = max(candidate.size)
+                    if long_side > 2000:
+                        scale = 2000 / long_side
+                        candidate = candidate.resize(
+                            (round(candidate.width * scale), round(candidate.height * scale))
+                        )
+                    buf = io.BytesIO()
+                    candidate.save(buf, "JPEG", quality=85)
+                    out.append(buf.getvalue())
     except Exception:
         return []
     return out

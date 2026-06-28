@@ -3,9 +3,7 @@
 namespace App\Services;
 
 use App\Models\ModelConfig;
-use Illuminate\Support\Facades\Http;
 use RuntimeException;
-use Throwable;
 
 /**
  * 桌面「AI 档案管理」证件识别。
@@ -20,6 +18,8 @@ class DocumentRecognizeService
 {
     private const COMPAT_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
     private const FALLBACK_MODEL = 'qwen3.6-plus';
+
+    public function __construct(private SoftwareAiConfigService $ai) {}
 
     /**
      * @param  string  $mode  'vision'（页图）| 'text'（正文）
@@ -50,19 +50,19 @@ class DocumentRecognizeService
             $content[] = ['type' => 'text', 'text' => $instruction."\n\n证件正文如下，请识别并只输出 JSON：\n".mb_substr($body, 0, 16000, 'UTF-8')];
         }
 
-        $response = Http::withToken($this->apiKey())
-            ->timeout(180)
-            ->acceptJson()
-            ->post(self::COMPAT_BASE.'/chat/completions', [
-                'model' => $this->model(),
-                'messages' => [['role' => 'user', 'content' => $content]],
-                'temperature' => 0.1,
-                'stream' => false,
-            ]);
+        $config = $this->modelConfig();
+        $messages = [];
+        if (filled($config->system_prompt)) {
+            $messages[] = ['role' => 'system', 'content' => (string) $config->system_prompt];
+        }
+        $messages[] = ['role' => 'user', 'content' => $content];
+        $response = $this->ai->chat(
+            $config,
+            $messages,
+            ['temperature' => (float) ($config->temperature ?? 0.1)],
+        );
 
-        $this->ensureSuccessful($response->status(), $response->body());
-
-        $out = data_get($response->json(), 'choices.0.message.content');
+        $out = data_get($response, 'choices.0.message.content');
         if (is_array($out)) {
             $out = collect($out)->map(fn ($p) => is_array($p) ? ($p['text'] ?? '') : (string) $p)->implode('');
         }
@@ -74,58 +74,25 @@ class DocumentRecognizeService
         return ['content' => $out, 'fields' => $this->extractJson($out)];
     }
 
-    private function apiKey(): string
+    /** 后台按软件读取完整配置；未迁移时仍使用原来的阿里云默认值。 */
+    private function modelConfig(): ModelConfig
     {
-        $key = trim((string) config('ai.dashscope_api_key', ''));
-        if ($key === '') {
-            throw new RuntimeException('服务器未配置 DASHSCOPE_API_KEY。');
+        $config = $this->ai->find('aidoc', 'document_recognize', false);
+        if ($config) {
+            return $config;
         }
 
-        return $key;
-    }
-
-    /** 后台可单独给「证件识别」配模型(purpose=document_recognize)；否则复用通用视觉模型。 */
-    private function model(): string
-    {
-        try {
-            $admin = trim((string) ModelConfig::query()
-                ->where('purpose', 'document_recognize')
-                ->where('enabled', true)
-                ->value('model'));
-            if ($admin !== '') {
-                return $admin;
-            }
-        } catch (Throwable $e) {
-            // 忽略，走配置兜底
-        }
-
-        return trim((string) config('ai.defaults.vision.model', self::FALLBACK_MODEL)) ?: self::FALLBACK_MODEL;
-    }
-
-    private function ensureSuccessful(int $status, string $body): void
-    {
-        if ($status >= 200 && $status < 300) {
-            return;
-        }
-        $json = json_decode($body, true);
-        $code = (string) data_get($json, 'error.code', data_get($json, 'code', $status));
-        $message = (string) data_get($json, 'error.message', data_get($json, 'message', mb_substr($body, 0, 300)));
-        $text = strtolower($code.' '.$message);
-
-        if (str_contains($text, 'invalidapikey') || str_contains($text, 'invalid_api_key') || str_contains($text, 'incorrect api key')) {
-            throw new RuntimeException('证件识别失败：阿里云 API Key 无效，请检查服务器 .env 的 DASHSCOPE_API_KEY。');
-        }
-        if (str_contains($text, 'access_denied') || str_contains($text, 'model not exist') || str_contains($text, 'modelnotfound')) {
-            throw new RuntimeException('证件识别失败：当前 Key 无权调用视觉模型（'.$this->model().'），请在百炼开通，或在后台配置 document_recognize 模型。');
-        }
-        if (str_contains($text, 'arrearage')) {
-            throw new RuntimeException('证件识别失败：阿里云账户欠费，请到百炼控制台充值。');
-        }
-        if (str_contains($text, 'throttling') || str_contains($text, 'ratelimit') || str_contains($text, 'rate limit')) {
-            throw new RuntimeException('证件识别失败：阿里云接口被限流，请稍后重试。');
-        }
-
-        throw new RuntimeException('证件识别失败：'.mb_substr($code.'：'.$message, 0, 300, 'UTF-8'));
+        return new ModelConfig([
+            'software_code' => 'aidoc',
+            'purpose' => 'document_recognize',
+            'provider' => 'aliyun',
+            'base_url' => self::COMPAT_BASE,
+            'model' => trim((string) config('ai.defaults.vision.model', self::FALLBACK_MODEL)) ?: self::FALLBACK_MODEL,
+            'enabled' => true,
+            'temperature' => 0.1,
+            'max_tokens' => 4096,
+            'request_timeout' => 180,
+        ]);
     }
 
     private function extractJson(string $content): array

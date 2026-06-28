@@ -8,11 +8,16 @@ class ModelConfig extends Model
 {
     protected $fillable = [
         'purpose',
+        'software_code',
+        'software_name',
+        'feature_name',
         'provider',
         'base_url',
         'model',
         'api_key_encrypted',
         'system_prompt',
+        'knowledge_base',
+        'settings',
         'enabled',
         'temperature',
         'max_tokens',
@@ -35,6 +40,7 @@ class ModelConfig extends Model
             'request_timeout' => 'integer',
             'last_tested_at' => 'datetime',
             'last_usage' => 'array',
+            'settings' => 'array',
         ];
     }
 }

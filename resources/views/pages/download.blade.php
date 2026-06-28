@@ -35,6 +35,37 @@
         $snapDlUrl = env('SNAP_SAVER_DOWNLOAD_URL', $snapDlUrl);
     @endphp
 
+    @if(($softwareReleases ?? collect())->isNotEmpty())
+        <div class="managed-downloads">
+            <div class="managed-downloads-head">
+                <span>官方最新版</span>
+                <strong>由管理员后台统一发布</strong>
+            </div>
+            @foreach($softwareReleases as $release)
+                <div class="dl-card managed-download-card">
+                    <div class="dl-card-head">
+                        <div class="dl-ico">⬇</div>
+                        <div class="dl-info">
+                            <div class="dl-name">{{ $release->software_name }} V{{ $release->version }}</div>
+                            <div class="dl-meta">
+                                {{ $release->platform === 'windows-x64' ? 'Windows 10/11 64位' : $release->platform }}
+                                · {{ number_format($release->file_size / 1024 / 1024, 2) }} MB
+                                · 已下载 {{ $release->downloads_count }} 次
+                            </div>
+                        </div>
+                    </div>
+                    @if($release->release_notes)
+                        <p class="managed-release-notes">{{ $release->release_notes }}</p>
+                    @endif
+                    <a class="btn btn-dl" href="{{ route('software-releases.download', ['release' => $release->id]) }}">
+                        下载 {{ $release->software_name }} V{{ $release->version }}
+                    </a>
+                    <div class="managed-checksum" title="{{ $release->sha256 }}">SHA256：{{ $release->sha256 }}</div>
+                </div>
+            @endforeach
+        </div>
+    @endif
+
     <div class="dl-card snap-download-card" id="snap-saver">
         <div class="dl-card-head">
             <div class="dl-ico">▣</div>

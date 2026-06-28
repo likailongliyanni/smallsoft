@@ -1,6 +1,6 @@
 {
   "name": "haobanfa-aidoc-manager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "好办法 AI 档案管理桌面端",
   "main": "electron/main.js",
   "author": "好办法",
@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "node electron/dev-runner.mjs",
     "build": "vite build",
+    "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
+    "prepare:electron": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-electron-runtime.ps1",
+    "dist:win": "npm run build && npm run build:backend && npm run prepare:electron && electron-builder --win nsis",
     "start": "electron ."
   },
   "dependencies": {
@@ -18,6 +21,53 @@
     "vue": "^3.5.13"
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^42.5.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "online.haobanfa.aidoc",
+    "productName": "好办法AI档案管理",
+    "copyright": "Copyright © 2026 好办法",
+    "electronDist": "build/electron-runtime",
+    "disableAsarIntegrity": true,
+    "directories": {
+      "output": "package-output",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/main.js",
+      "electron/preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend-dist/aidoc-backend",
+        "to": "backend"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "好办法AI档案管理-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "好办法AI档案管理",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }
