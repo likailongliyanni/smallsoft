@@ -1,6 +1,6 @@
 {
   "name": "haobanfa-aidoc-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "好办法 AI 档案管理桌面端",
   "main": "electron/main.js",
   "author": "好办法",

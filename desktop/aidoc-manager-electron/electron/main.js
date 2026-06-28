@@ -151,8 +151,14 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
-  mainWindow.webContents.on('did-fail-load', (_event, code, description) => {
-    writeLog(`[window load failed] ${code} ${description}`)
+  mainWindow.webContents.on('did-finish-load', () => {
+    writeLog(`[window loaded] ${mainWindow?.webContents.getURL() || ''}`)
+  })
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    writeLog(`[window load failed] ${code} ${description} url=${url || ''} main=${Boolean(isMainFrame)}`)
+  })
+  mainWindow.webContents.on('console-message', (_event, details) => {
+    writeLog(`[renderer console:${details.level}] ${details.message} (${details.sourceId || ''}:${details.lineNumber || 0})`)
   })
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     writeLog(`[renderer gone] ${JSON.stringify(details)}`)
