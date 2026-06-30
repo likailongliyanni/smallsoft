@@ -51,7 +51,7 @@
           </div>
         </div>
         <nav>
-          <button class="nav-item" :class="{ active: view === 'workbench' }" @click="view = 'workbench'"><LayoutDashboard :size="18" />工作台</button>
+          <button class="nav-item" :class="{ active: view === 'workbench' }" @click="view = 'workbench'"><LayoutDashboard :size="18" />快速扫描 / 导入</button>
           <button class="nav-item" :class="{ active: view === 'library' }" @click="switchToLibrary"><ListChecks :size="18" />识别队列</button>
           <button class="nav-item" :class="{ active: view === 'finder' }" @click="openFinder"><FolderSearch :size="18" />AI 档案秘书</button>
           <button class="nav-item" :class="{ active: view === 'points' }" @click="openPoints"><ShoppingCart :size="18" />购买积分</button>
@@ -110,8 +110,8 @@
           <article class="panel import-panel">
             <div class="panel-head compact">
               <div>
-                <p class="eyebrow">上传资料</p>
-                <h2>拖文件进来，自动入库</h2>
+                <p class="eyebrow">本地资料预处理</p>
+                <h2>快速扫描与资料导入</h2>
               </div>
               <button class="ghost-btn" :disabled="scan.running" @click="refreshSummary">
                 <RefreshCw :size="16" />
@@ -138,14 +138,14 @@
                  @dragleave.prevent="dragOver = false" @drop.prevent="onDropFiles">
               <FolderInput :size="34" />
               <p class="upload-title">把一个或多个文件拖到这里上传</p>
-              <p class="upload-sub">支持 PDF / 图片 / Word / Excel，拖进来自动进资料库</p>
+              <p class="upload-sub">支持 PDF / 图片 / Word / Excel / Markdown / 常见文本格式</p>
               <button class="primary-btn" :disabled="scan.running" @click="pickAndImport">
                 <FolderSearch :size="16" /> 选择文件
               </button>
             </div>
 
-            <details class="folder-scan-more">
-              <summary>或：导入整个文件夹</summary>
+            <details class="folder-scan-more" open>
+              <summary><strong>快速扫描本地文件夹</strong>（重复/无效文件预检）</summary>
               <div class="field-group" style="margin-top:10px">
                 <div class="path-row">
                   <input :value="scan.sourceDir || '选择供应商资料 / 下载目录等文件夹'" readonly />
@@ -153,6 +153,32 @@
                     <FolderSearch :size="16" /> 选择
                   </button>
                   <button class="secondary-btn" :disabled="scan.running || !canStartScan" @click="startScan">开始</button>
+                </div>
+                <div v-if="scan.roots.length" class="scan-roots">
+                  <span>一键扫描整个盘符：</span>
+                  <button v-for="root in scan.roots" :key="root" :class="{ active: scan.sourceDir === root }" :disabled="scan.running" @click="scan.sourceDir = root">{{ root }}</button>
+                </div>
+                <div class="segmented scan-mode-tabs">
+                  <button :class="{ active: scan.mode === 'quick' }" :disabled="scan.running" @click="scan.mode = 'quick'">快速预检（推荐）</button>
+                  <button :class="{ active: scan.mode === 'import' }" :disabled="scan.running" @click="scan.mode = 'import'">直接导入</button>
+                </div>
+                <div v-if="scan.mode === 'quick'" class="scan-filters">
+                  <div class="segmented scan-depth-tabs">
+                    <button :class="{ active: scan.scanDepth === 'fast' }" :disabled="scan.running" @click="scan.scanDepth = 'fast'">极速全盘查重（内容指纹）</button>
+                    <button :class="{ active: scan.scanDepth === 'preview' }" :disabled="scan.running" @click="scan.scanDepth = 'preview'">首页预检（较慢）</button>
+                  </div>
+                  <div class="scan-type-checks">
+                    <label v-for="item in [{k:'pdf',n:'PDF'},{k:'image',n:'图片'},{k:'word',n:'Word'},{k:'excel',n:'Excel'},{k:'text',n:'文本/MD'}]" :key="item.k">
+                      <input v-model="scan.fileTypes" type="checkbox" :value="item.k" />{{ item.n }}
+                    </label>
+                  </div>
+                  <label>大小(MB)<input v-model="scan.minSizeMb" type="number" min="0" step="0.1" placeholder="最小" /></label>
+                  <span>—</span>
+                  <label><input v-model="scan.maxSizeMb" type="number" min="0" step="0.1" placeholder="最大，不限可空" /></label>
+                  <label>创建日期<input v-model="scan.createdFrom" type="date" /></label>
+                  <span>—</span>
+                  <label><input v-model="scan.createdTo" type="date" /></label>
+                  <label class="scan-noise"><input v-model="scan.skipNoise" type="checkbox" />跳过系统、缓存和开发依赖目录</label>
                 </div>
                 <label class="check-line" style="margin-top:8px">
                   <input v-model="scan.recursive" type="checkbox" /><span>包含子文件夹</span>
@@ -162,7 +188,7 @@
                     <button :class="{ active: scan.importMode === 'copy' }" :disabled="scan.running" @click="scan.importMode = 'copy'">复制管理</button>
                     <button :class="{ active: scan.importMode === 'index' }" :disabled="scan.running" @click="scan.importMode = 'index'">仅建索引</button>
                   </div>
-                  <p>{{ scan.running ? '正在处理，请保持软件打开。' : '新电脑默认赠送 30 AI积分，任务成功后扣费。' }}</p>
+                  <p>{{ scan.running ? '正在处理，请保持软件打开。' : (scan.mode === 'quick' ? (scan.scanDepth === 'fast' ? '极速模式读取文件片段建立内容指纹，不扣积分。' : '首页预检读取每份文档开头，不扣积分。') : '直接导入后再进行正式识别。') }}</p>
                 </div>
               </div>
             </details>
@@ -180,7 +206,7 @@
             <div class="progress-block">
               <div class="progress-top">
                 <strong>{{ progressPercent }}%</strong>
-                <span>{{ progress.donePages }} / {{ progress.totalPages || 0 }} 页</span>
+                <span>{{ progress.donePages }} / {{ progress.totalPages || 0 }} {{ isQuickProgress ? '份' : '页' }}</span>
               </div>
               <div class="progress-track">
                 <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
@@ -192,16 +218,63 @@
             </div>
 
             <div class="counter-grid">
-              <div><small>成功</small><strong>{{ progress.successPages }}</strong></div>
-              <div><small>重复跳过</small><strong>{{ progress.skippedPages }}</strong></div>
-              <div><small>失败</small><strong>{{ progress.failedPages }}</strong></div>
+              <div><small>{{ isQuickProgress ? '可用' : '成功' }}</small><strong>{{ progress.successPages }}</strong></div>
+              <div><small>{{ isQuickProgress ? '确认重复' : '重复跳过' }}</small><strong>{{ progress.skippedPages }}</strong></div>
+              <div><small>{{ isQuickProgress ? '无效/异常' : '失败' }}</small><strong>{{ progress.failedPages }}</strong></div>
             </div>
 
             <div v-if="scan.result" class="result-note">
               <CheckCircle2 :size="18" />
-              <span>本次导入 {{ scan.result.created_documents }} 份，成功识别 {{ scan.result.billable_pages }} 页。</span>
+              <span v-if="scan.result.scan_mode === 'quick'">预检 {{ scan.result.total }} 份：可用 {{ scan.result.valid }}、确认重复 {{ scan.result.duplicate_exact || 0 }}、需复核 {{ scan.result.similar || 0 }}、无效 {{ scan.result.invalid }}。</span>
+              <span v-else>本次导入 {{ scan.result.created_documents }} 份，共 {{ scan.result.billable_pages }} 页。</span>
             </div>
           </article>
+        </section>
+
+        <section v-if="quick.jobId" class="panel quick-review-panel">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">快速预检结果</p>
+              <h2>先审核清理，再正式识别</h2>
+            </div>
+            <div class="quick-stats">
+              <button :class="{ active: quick.status === '' }" @click="setQuickStatus('')">全部 {{ quickTotalCount }}</button>
+              <button :class="{ active: quick.status === 'valid' }" @click="setQuickStatus('valid')">可用 {{ quick.stats.valid || 0 }}</button>
+              <button :class="{ active: quick.status === 'duplicate_exact' }" @click="setQuickStatus('duplicate_exact')">确认重复 {{ quick.stats.duplicate_exact || 0 }}</button>
+              <button :class="{ active: quick.status === 'similar' }" @click="setQuickStatus('similar')">需复核 {{ quick.stats.similar || 0 }}</button>
+              <button :class="{ active: quick.status === 'invalid' }" @click="setQuickStatus('invalid')">无效 {{ quick.stats.invalid || 0 }}</button>
+            </div>
+          </div>
+          <div class="quick-actions">
+            <button class="ghost-btn" :disabled="quick.busy" @click="toggleQuickPage">勾选本页</button>
+            <button class="ghost-btn" :disabled="quick.busy || !quickSelected.size" @click="markQuick('valid')">标为有效</button>
+            <button class="ghost-btn" :disabled="quick.busy || !quickSelected.size" @click="markQuick('invalid')">标为无效</button>
+            <button class="secondary-btn" :disabled="quick.busy || !quickSelected.size" @click="deleteQuickSelected"><Trash2 :size="14" />删除无效/确认重复源文件</button>
+            <button class="primary-btn" :disabled="quick.busy || !quickSelected.size" @click="importQuickSelected">导入有效文件，进入正式识别</button>
+            <button class="secondary-btn" :disabled="quick.busy || !(quick.stats.invalid || quick.stats.duplicate_exact)" @click="deleteAllQuickDiscard">删除全部无效/确认重复</button>
+            <button class="primary-btn" :disabled="quick.busy || !quick.stats.valid" @click="importAllQuickValid">导入全部有效({{ quick.stats.valid || 0 }})</button>
+          </div>
+          <div class="quick-table">
+            <div class="quick-row head">
+              <span></span><span>文件</span><span>格式/类型</span><span>大小</span><span>创建日期</span><span>预检结论</span><span>依据</span>
+            </div>
+            <div v-if="quick.loading" class="empty-row">正在读取预检结果…</div>
+            <div v-else-if="!quick.items.length" class="empty-row">当前筛选下没有文件。</div>
+            <div v-for="item in quick.items" :key="item.id" class="quick-row">
+              <span><input type="checkbox" :checked="quickSelected.has(item.id)" @change="toggleQuick(item.id)" /></span>
+              <span class="file-cell file-open" :title="item.source_path" @click="openPath(item.source_path)"><FileText :size="14" /><em>{{ item.file_name }}</em></span>
+              <span>{{ item.extension.toUpperCase() }} / {{ item.detected_type_label }}</span>
+              <span>{{ fmtSize(item.size_bytes) }}</span>
+              <span>{{ (item.file_created_at || '').slice(0, 10) }}</span>
+              <span><i class="dot" :class="quickStatusClass(item.status)"></i>{{ quickStatusLabel(item.status) }}</span>
+              <span class="cell-clip" :title="item.preview_text || item.reason">{{ item.reason }}</span>
+            </div>
+          </div>
+          <div class="pagination">
+            <button class="ghost-btn small" :disabled="quick.page <= 1 || quick.loading" @click="loadQuick(quick.page - 1)">上一页</button>
+            <span>第 {{ quick.page }} / {{ quickPages }} 页，共 {{ quick.total }} 条</span>
+            <button class="ghost-btn small" :disabled="quick.page >= quickPages || quick.loading" @click="loadQuick(quick.page + 1)">下一页</button>
+          </div>
         </section>
 
         <section class="panel queue-panel">
@@ -317,11 +390,12 @@
 
           <section class="panel">
             <div class="panel-head compact">
-              <div><p class="eyebrow">资料库</p><h2>共 {{ lib.total }} 条</h2></div>
+              <div><p class="eyebrow">第二步：正式 AI 识别（不是查重）</p><h2>资料库共 {{ lib.total }} 条</h2></div>
               <div class="lib-toolbar">
                 <button class="ghost-btn" :disabled="lib.loading" @click="loadDocs"><RefreshCw :size="15" />刷新</button>
+                <button class="ghost-btn" :disabled="recog.running" @click="view = 'workbench'">要查重？进入极速全盘</button>
                 <button class="ghost-btn" :disabled="recog.running || !unrecognizedDocs.length" @click="selectUnrecognized">勾选未识别</button>
-                <button class="primary-btn" :disabled="recog.running || !selectedCount" @click="recognizeSelected"><Sparkles :size="15" />识别选中({{ selectedCount }})</button>
+                <button class="primary-btn" :disabled="recog.running || !selectedCount" @click="recognizeSelected"><Sparkles :size="15" />正式 AI 识别选中({{ selectedCount }})</button>
                 <button class="secondary-btn" :disabled="recog.running || !selectedConfirmable" @click="confirmSelected"><CheckCircle2 :size="15" />确认选中({{ selectedConfirmable }})</button>
               </div>
             </div>
@@ -333,6 +407,9 @@
                 <strong>{{ recog.running ? (recog.stageLabel || '识别中…') : '识别完成' }}</strong>
                 <span class="recog-current" :title="recog.current">{{ recog.current }}</span>
                 <span class="recog-count">{{ recog.done }} / {{ recog.total }}</span>
+                <button v-if="recog.running && recog.jobId" class="ghost-btn small" :disabled="recog.cancelling" @click="cancelRecognition">
+                  {{ recog.cancelling ? '正在停止…' : '终止识别' }}
+                </button>
               </div>
               <div class="recog-track"><div class="recog-fill" :style="{ width: recogPercent + '%' }"></div></div>
               <div v-if="!recog.running && recog.lastError" class="recog-err">部分未用 AI：{{ recog.lastError }}（已按规则粗分类，可手动编辑）</div>
@@ -354,7 +431,7 @@
                 <span v-for="c in activeColumns" :key="c.key" class="cell-clip" :title="(d.values && d.values[c.key]) || ''">{{ (d.values && d.values[c.key]) || '—' }}</span>
                 <span><i class="dot" :class="reviewClass(d)"></i>{{ reviewLabel(d) }}<i v-if="d.is_duplicate" class="dup-tag">重复</i></span>
                 <span class="ops">
-                  <button class="link-btn" :disabled="d.busy" @click="recognizeOne(d)">{{ d.busy ? '识别中…' : (d.recognized ? '重新识别' : '识别') }}</button>
+                  <button class="link-btn" :disabled="d.busy" @click="recognizeOne(d)">{{ d.busy ? 'AI识别中…' : (d.recognized ? '重新AI识别' : 'AI识别') }}</button>
                   <button class="link-btn" @click="openDetail(d.id)">修改</button>
                   <button v-if="d.recognized && d.review_status !== 'confirmed'" class="link-btn confirm-link" :disabled="d.busy" @click="confirmOne(d)">确认</button>
                   <button class="link-btn delete-link" :disabled="d.busy || recog.running" @click="deleteOne(d)">删除</button>
@@ -685,10 +762,32 @@ const scan = reactive({
   sourceDir: '',
   recursive: true,
   importMode: 'copy',
+  mode: 'quick',
+  scanDepth: 'fast',
+  skipNoise: true,
+  roots: [],
+  fileTypes: ['pdf', 'image', 'word', 'excel', 'text'],
+  minSizeMb: '',
+  maxSizeMb: '',
+  createdFrom: '',
+  createdTo: '',
   running: false,
   result: null,
   liveItems: [],
 })
+
+const FORMAT_EXTENSIONS = {
+  pdf: ['pdf'],
+  image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff'],
+  word: ['docx'],
+  excel: ['xlsx', 'xlsm'],
+  text: ['txt', 'csv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'],
+}
+const quick = reactive({
+  jobId: '', items: [], stats: {}, status: '', page: 1, perPage: 50, total: 0,
+  loading: false, busy: false,
+})
+const quickSelected = reactive(new Set())
 
 const progress = reactive({
   stage: '',
@@ -702,6 +801,7 @@ const progress = reactive({
 })
 
 const canStartScan = computed(() => Boolean(state.libraryDir && scan.sourceDir))
+const isQuickProgress = computed(() => scan.running ? scan.mode === 'quick' : scan.result?.scan_mode === 'quick')
 const progressPercent = computed(() => {
   if (!progress.totalPages) return scan.running ? 8 : 0
   return Math.min(100, Math.round((progress.donePages / progress.totalPages) * 100))
@@ -710,6 +810,8 @@ const recentItems = computed(() => {
   if (scan.result?.items?.length) return [...scan.result.items].reverse().slice(0, 14)
   return summary.recent || []
 })
+const quickTotalCount = computed(() => Object.values(quick.stats || {}).reduce((sum, value) => sum + Number(value || 0), 0))
+const quickPages = computed(() => Math.max(1, Math.ceil(quick.total / quick.perPage)))
 
 function resetProgress() {
   Object.assign(progress, {
@@ -749,6 +851,16 @@ async function registerDevice() {
   state.serial = data.serial || state.serial
   state.quota = data.quota || state.quota
   state.billing = data.billing || state.billing
+  if (state.unlocked) await loadScanRoots()
+}
+
+async function loadScanRoots() {
+  try {
+    const data = await backend('scan_roots')
+    scan.roots = data.roots || []
+  } catch {
+    scan.roots = []
+  }
 }
 
 async function syncPoints() {
@@ -802,6 +914,7 @@ async function setPassword() {
     state.unlocked = Boolean(data.unlocked)
     passwordForm.password = ''
     passwordForm.confirm = ''
+    await loadScanRoots()
     await refreshSummary()
   } catch (error) {
     passwordForm.error = error.message
@@ -821,6 +934,7 @@ async function verifyPassword() {
     }
     state.unlocked = true
     passwordForm.password = ''
+    await loadScanRoots()
     await refreshSummary()
   } catch (error) {
     passwordForm.error = error.message
@@ -897,24 +1011,54 @@ async function pickAndImport() {
 
 async function startScan() {
   if (!canStartScan.value || scan.running) return
+  if (scan.mode === 'quick' && !scan.fileTypes.length) {
+    window.alert('请至少选择一种文档格式。')
+    return
+  }
   scan.running = true
   scan.result = null
   resetProgress()
   try {
-    const result = await backend('scan_folder', {
-      path: scan.sourceDir,
-      recursive: scan.recursive,
-      import_mode: scan.importMode,
-    })
-    scan.result = result
+    const result = scan.mode === 'quick'
+      ? await backend('quick_scan', {
+          path: scan.sourceDir,
+          recursive: scan.recursive,
+          scan_depth: scan.scanDepth,
+          skip_noise: scan.skipNoise,
+          extensions: scan.fileTypes.flatMap((type) => FORMAT_EXTENSIONS[type] || []),
+          min_size_mb: scan.minSizeMb,
+          max_size_mb: scan.maxSizeMb,
+          created_from: scan.createdFrom,
+          created_to: scan.createdTo,
+        })
+      : await backend('scan_folder', {
+          path: scan.sourceDir,
+          recursive: scan.recursive,
+          import_mode: scan.importMode,
+        })
+    scan.result = { ...result, scan_mode: scan.mode }
     progress.stage = 'done'
-    progress.stageLabel = '已完成'
-    progress.donePages = result.billable_pages + result.skipped_pages + result.failed_pages
-    progress.totalPages = result.total_pages
-    progress.successPages = result.billable_pages
-    progress.skippedPages = result.skipped_pages
-    progress.failedPages = result.failed_pages
-    await refreshSummary()
+    if (scan.mode === 'quick') {
+      progress.stageLabel = '快速预检完成，请审核结果'
+      progress.donePages = result.total
+      progress.totalPages = result.total
+      progress.successPages = result.valid
+      progress.skippedPages = result.duplicate
+      progress.failedPages = result.invalid + result.error
+      quick.jobId = result.job_id
+      quick.status = ''
+      quick.page = 1
+      quickSelected.clear()
+      await loadQuick(1)
+    } else {
+      progress.stageLabel = '已完成'
+      progress.donePages = result.billable_pages + result.skipped_pages + result.failed_pages
+      progress.totalPages = result.total_pages
+      progress.successPages = result.billable_pages
+      progress.skippedPages = result.skipped_pages
+      progress.failedPages = result.failed_pages
+      await refreshSummary()
+    }
   } catch (error) {
     progress.stage = 'failed'
     progress.stageLabel = '任务失败'
@@ -922,6 +1066,138 @@ async function startScan() {
   } finally {
     scan.running = false
   }
+}
+
+async function loadQuick(page = quick.page) {
+  if (!quick.jobId) return
+  quick.loading = true
+  try {
+    const data = await backend('quick_scan_list', {
+      job_id: quick.jobId, status: quick.status, page, per_page: quick.perPage,
+    })
+    quick.items = data.items || []
+    quick.stats = data.stats || {}
+    quick.total = Number(data.total || 0)
+    quick.page = Number(data.page || 1)
+  } finally {
+    quick.loading = false
+  }
+}
+
+function setQuickStatus(status) {
+  quick.status = status
+  quickSelected.clear()
+  loadQuick(1)
+}
+
+function toggleQuick(id) {
+  if (quickSelected.has(id)) quickSelected.delete(id)
+  else quickSelected.add(id)
+}
+
+function toggleQuickPage() {
+  const ids = quick.items.map((item) => item.id)
+  const allSelected = ids.length && ids.every((id) => quickSelected.has(id))
+  for (const id of ids) {
+    if (allSelected) quickSelected.delete(id)
+    else quickSelected.add(id)
+  }
+}
+
+async function markQuick(status) {
+  if (!quickSelected.size || quick.busy) return
+  quick.busy = true
+  try {
+    await backend('quick_scan_mark', { ids: [...quickSelected], status })
+    quickSelected.clear()
+    await loadQuick()
+  } finally {
+    quick.busy = false
+  }
+}
+
+async function deleteQuickSelected() {
+  if (!quickSelected.size || quick.busy) return
+  if (!window.confirm(`确定永久删除选中的 ${quickSelected.size} 个项目吗？\n\n程序只会删除“无效”或完整 SHA-256 已确认重复的源文件；“需复核”不会删除。`)) return
+  quick.busy = true
+  try {
+    const result = await backend('quick_scan_delete', { ids: [...quickSelected] })
+    quickSelected.clear()
+    await loadQuick()
+    if (result.failed?.length) window.alert(`已删除 ${result.deleted} 份，${result.failed.length} 份删除失败。`)
+  } finally {
+    quick.busy = false
+  }
+}
+
+async function importQuickSelected() {
+  if (!quickSelected.size || quick.busy) return
+  quick.busy = true
+  try {
+    const result = await backend('quick_scan_import', {
+      ids: [...quickSelected], import_mode: scan.importMode,
+    })
+    quickSelected.clear()
+    await loadQuick()
+    await refreshSummary()
+    if (!result.document_ids?.length) {
+      window.alert('选中项目中没有标记为“有效”的文件。请先审核并标为有效。')
+      return
+    }
+    await switchToLibrary()
+    selected.clear()
+    const visibleIds = new Set(lib.docs.map((item) => item.id))
+    for (const id of result.document_ids) if (visibleIds.has(id)) selected.add(id)
+  } finally {
+    quick.busy = false
+  }
+}
+
+async function deleteAllQuickDiscard() {
+  const count = Number(quick.stats.invalid || 0) + Number(quick.stats.duplicate_exact || 0)
+  if (!count || quick.busy) return
+  if (!window.confirm(`确定永久删除本次预检中全部 ${count} 份“无效/确认重复”源文件吗？\n\n重复件已经完整 SHA-256 校验；“需复核”文件不会删除。删除后无法恢复。`)) return
+  quick.busy = true
+  try {
+    const result = await backend('quick_scan_delete', {
+      job_id: quick.jobId, all_discard: true,
+    })
+    quickSelected.clear()
+    await loadQuick()
+    if (result.failed?.length) window.alert(`已删除 ${result.deleted} 份，${result.failed.length} 份删除失败。`)
+  } finally {
+    quick.busy = false
+  }
+}
+
+async function importAllQuickValid() {
+  const count = Number(quick.stats.valid || 0)
+  if (!count || quick.busy) return
+  if (!window.confirm(`确定把审核为有效的 ${count} 份文件正式导入资料库吗？\n导入后你可以再选择“正式识别全部”。`)) return
+  quick.busy = true
+  try {
+    const result = await backend('quick_scan_import', {
+      job_id: quick.jobId, all_valid: true, import_mode: scan.importMode,
+    })
+    quickSelected.clear()
+    await loadQuick()
+    await refreshSummary()
+    await switchToLibrary()
+    selected.clear()
+    const visibleIds = new Set(lib.docs.map((item) => item.id))
+    for (const id of result.document_ids || []) if (visibleIds.has(id)) selected.add(id)
+    if (result.failed?.length) window.alert(`成功导入 ${result.created} 份，${result.failed.length} 份失败。`)
+  } finally {
+    quick.busy = false
+  }
+}
+
+function quickStatusLabel(status) {
+  return { valid: '可用', duplicate_exact: '确认重复', similar: '需复核', duplicate: '待确认重复', invalid: '无效', error: '读取异常', imported: '已导入', deleted: '已删除' }[status] || status
+}
+
+function quickStatusClass(status) {
+  return { valid: 'confirmed', imported: 'confirmed', duplicate_exact: 'duplicate', similar: 'pending', duplicate: 'pending', invalid: 'failed', error: 'failed', deleted: 'failed' }[status] || 'pending'
 }
 
 async function openPath(path) {
@@ -934,6 +1210,26 @@ async function copySerial() {
 }
 
 function applyProgress(message) {
+  if (message.event === 'aidoc_quick_scan') {
+    progress.stage = message.stage || progress.stage
+    progress.stageLabel = message.stage_label || progress.stageLabel
+    progress.currentFile = message.current_file || progress.currentFile
+    progress.donePages = Number(message.done ?? progress.donePages ?? 0)
+    progress.totalPages = Number(message.total ?? progress.totalPages ?? 0)
+    progress.successPages = Number(message.valid ?? progress.successPages ?? 0)
+    progress.skippedPages = Number(message.duplicate ?? progress.skippedPages ?? 0)
+    progress.failedPages = Number(message.invalid ?? 0) + Number(message.error ?? 0)
+    return
+  }
+  if (message.event === 'aidoc_recognize_batch') {
+    recog.done = Number(message.done ?? recog.done ?? 0)
+    recog.total = Number(message.total ?? recog.total ?? 0)
+    if (message.stage_label) recog.stageLabel = message.stage_label
+    if (message.error && message.error !== '用户已取消' && !['cancelling', 'cancelled'].includes(message.stage)) {
+      recog.lastError = message.error
+    }
+    return
+  }
   if (message.event === 'aidoc_recognize') {
     if (message.file) recog.current = message.file
     if (message.stage_label) recog.stageLabel = message.stage_label
@@ -983,15 +1279,16 @@ const detail = reactive({
 // AI 识别进度（单份或一键批量都用它，让用户看见在干活）
 const recog = reactive({
   running: false, total: 0, done: 0, current: '', stageLabel: '',
-  aiOk: 0, aiFail: 0, lastError: '',
+  aiOk: 0, aiFail: 0, lastError: '', jobId: '', cancelling: false,
 })
 const recogPercent = computed(() => {
   if (!recog.total) return recog.running ? 10 : 0
   return Math.min(100, Math.round((recog.done / recog.total) * 100))
 })
 
-// 勾选选择：可任意多选（全选用于「统一确认」）；识别时内部限每批 10 个（识别慢、扣费）。
+// 单份识别参数不变，只把互不相关的网络等待重叠起来；默认三路可兼顾速度和服务限流。
 const MAX_RECOG = 10
+const RECOGNIZE_WORKERS = 3
 const selected = reactive(new Set())
 const selectedCount = computed(() => selected.size)
 const anySelected = computed(() => selected.size > 0)
@@ -1120,18 +1417,10 @@ function reviewLabel(d) {
 async function recognizeOne(d) {
   if (d.busy || recog.running) return
   d.busy = true
-  Object.assign(recog, { running: true, total: 1, done: 0, current: d.file_name, stageLabel: '准备识别…', aiOk: 0, aiFail: 0, lastError: '' })
   try {
-    const r = await backend('analyze_document', { id: d.id })
-    recog.done = 1
-    if (r.ai_available) recog.aiOk = 1
-    else { recog.aiFail = 1; recog.lastError = r.ai_error || 'AI 未识别' }
+    await recognizeBatch([d])
     await reloadAllDocsAfterRecognition()
-  } catch (error) {
-    recog.lastError = error.message
-    alert('识别失败：' + error.message)
   } finally {
-    recog.running = false
     d.busy = false
   }
 }
@@ -1179,22 +1468,55 @@ async function recognizeSelected() {
     if (!window.confirm(`选了 ${targets.length} 个，识别较慢且按页扣费。这次先识别前 ${MAX_RECOG} 个，确定吗？`)) return
     targets = targets.slice(0, MAX_RECOG)
   }
-  Object.assign(recog, { running: true, total: targets.length, done: 0, current: '', stageLabel: '准备识别…', aiOk: 0, aiFail: 0, lastError: '' })
-  for (const d of targets) {
-    recog.current = d.file_name
-    try {
-      const r = await backend('analyze_document', { id: d.id })
-      if (r.ai_available) recog.aiOk++
-      else { recog.aiFail++; if (r.ai_error) recog.lastError = r.ai_error }
-    } catch (e) {
-      recog.aiFail++
-      recog.lastError = e.message
-    }
-    recog.done++
-  }
-  recog.running = false
+  await recognizeBatch(targets)
   selected.clear()
   await reloadAllDocsAfterRecognition()
+}
+
+async function recognizeBatch(targets) {
+  const jobId = globalThis.crypto?.randomUUID?.() || `recognize-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  Object.assign(recog, {
+    running: true, total: targets.length, done: 0, current: '',
+    stageLabel: `准备 ${RECOGNIZE_WORKERS} 路并发识别…`, aiOk: 0, aiFail: 0, lastError: '',
+    jobId, cancelling: false,
+  })
+  try {
+    const result = await backend('analyze_documents', {
+      ids: targets.map((d) => d.id),
+      workers: RECOGNIZE_WORKERS,
+      job_id: jobId,
+    })
+    recog.done = Number(result.done || 0)
+    recog.total = Number(result.total || targets.length)
+    recog.aiOk = Number(result.ai_ok || 0)
+    recog.aiFail = Number(result.ai_fail || 0)
+    const failed = (result.items || []).find((item) => (!item.ok && !item.cancelled) || item.data?.ai_error)
+    if (failed) recog.lastError = failed.error || failed.data?.ai_error || ''
+    if (result.was_cancelled) recog.stageLabel = `已终止，实际完成 ${result.done - result.cancelled} 份`
+  } catch (error) {
+    recog.lastError = error.message
+    window.alert('批量识别失败：' + error.message)
+  } finally {
+    recog.running = false
+    recog.cancelling = false
+    if (recog.jobId === jobId) recog.jobId = ''
+  }
+}
+
+async function cancelRecognition() {
+  if (!recog.running || !recog.jobId || recog.cancelling) return
+  recog.cancelling = true
+  recog.stageLabel = '正在停止，等待已发出的识别结束…'
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await backend('cancel_recognition', { job_id: recog.jobId })
+      if (result.found || !recog.running) break
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+  } catch (error) {
+    recog.cancelling = false
+    recog.lastError = error.message
+  }
 }
 // 全选统一确认：把选中的「已识别待确认」一次性确认入库（各自规范重命名 + 归类移动），不调 AI、不扣费。
 async function confirmSelected() {
@@ -1216,27 +1538,6 @@ async function confirmSelected() {
   selected.clear()
   await loadDocs()
 }
-async function recognizeAll() {
-  if (recog.running) return
-  const targets = unrecognizedDocs.value.slice()
-  if (!targets.length) return
-  Object.assign(recog, { running: true, total: targets.length, done: 0, current: '', stageLabel: '准备识别…', aiOk: 0, aiFail: 0, lastError: '' })
-  for (const d of targets) {
-    recog.current = d.file_name
-    try {
-      const r = await backend('analyze_document', { id: d.id })
-      if (r.ai_available) recog.aiOk++
-      else { recog.aiFail++; if (r.ai_error) recog.lastError = r.ai_error }
-    } catch (e) {
-      recog.aiFail++
-      recog.lastError = e.message
-    }
-    recog.done++
-  }
-  recog.running = false
-  await reloadAllDocsAfterRecognition()
-}
-
 async function openDetail(id) {
   detail.error = ''
   try {
@@ -1734,16 +2035,18 @@ async function sendChat() {
         reply.text += '\n\n合同文件未生成：' + generateError.message
       }
     } else if (r.document_job) {
-      reply.text += '\n\n正在生成新文书文件…'
+      const isContractPdf = String(r.document_job.document_type || '').toLowerCase().includes('contract') || String(r.document_job.title || '').includes('合同')
+      const generatingText = isContractPdf ? '\n\n正在本机生成合同 PDF…' : '\n\n正在生成新文书文件…'
+      reply.text += generatingText
       try {
         const generated = await backend('generate_document', { job: r.document_job })
         reply.generatedDocument = generated
-        reply.text = reply.text.replace('\n\n正在生成新文书文件…', '')
-        reply.text += `\n\n✓ 已生成新文书：${generated.file_name}`
+        reply.text = reply.text.replace(generatingText, '')
+        reply.text += `\n\n✓ 已在本机生成${isContractPdf ? '合同 PDF' : '新文书'}：${generated.file_name}`
         await loadCacheInfo()
       } catch (generateError) {
-        reply.text = reply.text.replace('\n\n正在生成新文书文件…', '')
-        reply.text += '\n\n文书文件未生成：' + generateError.message
+        reply.text = reply.text.replace(generatingText, '')
+        reply.text += `\n\n${isContractPdf ? '合同 PDF' : '文书文件'}未生成：` + generateError.message
       }
     }
     if (options.useWatermark && r.watermark_text) {

@@ -93,7 +93,9 @@ class DocumentAssistantService
 - template_id：命中资源池时填模板 id；综合起草时填 0。
 - document_type、title、output_name：文书类型、标题、文件名。
 - content：完整可直接落地的正文，不能只给提纲；必须遵守用户明确要求。
+- 综合生成合同但没有安全模板时，document_type 必须填 contract，桌面端会直接生成 PDF；不能只在 reply 里口头说已生成。
 - 生成合同时若已经返回 contract_job，则 document_job 必须为 null，避免生成两个文件。
+- reply 只能说“准备生成/将生成”；桌面端成功写出文件后才会追加“已生成”。
 
 本系统还支持“按需整理”和“导出水印”：
 1. 用户未选择整理时，gather_ids 必须返回空数组，只回答问题，不触发文件导出。
@@ -212,8 +214,13 @@ PROMPT;
             $ids = [];
         }
 
+        $reply = mb_substr(trim((string) ($data['reply'] ?? '我已经按你的要求核对了库存。')), 0, 8000);
+        if (! $contractJob && ! $documentJob && preg_match('/已(?:经)?(?:生成|导出|制作).{0,40}(?:合同|文件|文书|PDF|DOCX)/iu', $reply)) {
+            $reply .= "\n\n系统核验：本轮没有收到可执行的文件生成任务，因此尚未生成本地文件。请补充关键信息，并明确要求“生成并导出 PDF”。";
+        }
+
         return [
-            'reply' => mb_substr(trim((string) ($data['reply'] ?? '我已经按你的要求核对了库存。')), 0, 8000),
+            'reply' => $reply,
             'gather_ids' => $ids,
             'need_follow_up' => (bool) ($data['need_follow_up'] ?? false),
             'missing_materials' => collect((array) ($data['missing_materials'] ?? []))

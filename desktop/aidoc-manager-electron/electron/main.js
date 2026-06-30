@@ -105,10 +105,14 @@ function startBackend() {
 
 function callBackend(cmd, args = {}) {
   return new Promise((resolve, reject) => {
-    if (!backend) return reject(new Error('本地处理进程未启动'))
+    // 开发时解析到损坏文档或原生库异常可能导致 Python 进程退出；下一次操作自动拉起。
+    if (!backend) startBackend()
+    if (!backend) return reject(new Error('本地处理进程启动失败，请重启软件'))
     const id = ++nextRequestId
     // 扫描整批 12 分钟；AI 识别单份走视觉/服务器可能较久，给 5 分钟（后端调阿里云超时 300s）。
     const timeoutMs = cmd === 'scan_folder' ? 12 * 60 * 1000
+      : cmd === 'quick_scan' ? 30 * 60 * 1000
+      : cmd === 'analyze_documents' ? 24 * 60 * 60 * 1000
       : cmd === 'analyze_document' ? 5 * 60 * 1000
       : 90 * 1000
     const timer = setTimeout(() => {
@@ -187,7 +191,7 @@ ipcMain.handle('pickFiles', async (_event, options = {}) => {
   const result = await dialog.showOpenDialog({
     title: options.title || '选择要上传的文件',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm'] }],
+    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm', 'txt', 'csv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'] }],
   })
   return result.canceled ? [] : result.filePaths
 })

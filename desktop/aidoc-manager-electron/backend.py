@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,7 @@ import templatepool
 
 APP_CODE = "AIDOC"
 APP_NAME = "ai-doc"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.3"
 FREE_POINTS = 30
 DEFAULT_SERVER_URL = "https://tools.haobanfa.online"
 
@@ -57,10 +58,16 @@ SUPPORTED_EXTENSIONS = {
     ".xlsm",
     ".txt",
     ".csv",
+    ".md",
+    ".markdown",
+    ".json",
+    ".xml",
+    ".rtf",
+    ".log",
 }
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
-TEXT_EXTENSIONS = {".txt", ".csv"}
+TEXT_EXTENSIONS = {".txt", ".csv", ".md", ".markdown", ".json", ".xml", ".rtf", ".log"}
 OFFICE_EXTENSIONS = {".docx", ".xlsx", ".xlsm"}
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "HaobanfaAIDoc"
@@ -68,6 +75,10 @@ CONFIG_PATH = APP_DIR / "config.json"
 
 STATE: dict[str, Any] = {"token": "", "unlocked": False}
 CONFIG_LOCK = threading.Lock()
+EMIT_LOCK = threading.Lock()
+RECOGNIZE_CONTEXT = threading.local()
+RECOGNITION_JOBS: dict[str, dict[str, Any]] = {}
+RECOGNITION_JOBS_LOCK = threading.Lock()
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -75,13 +86,15 @@ def emit(payload: dict[str, Any]) -> None:
     # 即使父进程传了 PYTHONIOENCODING。直接写二进制 UTF-8，避免文件名、类型和
     # 服务端错误消息在 Electron 里变成乱码。
     raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    binary = getattr(sys.stdout, "buffer", None)
-    if binary is not None:
-        binary.write(raw)
-        binary.flush()
-        return
-    sys.stdout.write(raw.decode("utf-8"))
-    sys.stdout.flush()
+    # 批量识别时多个工作线程会同时推送进度，必须保证每条 JSON 完整写入。
+    with EMIT_LOCK:
+        binary = getattr(sys.stdout, "buffer", None)
+        if binary is not None:
+            binary.write(raw)
+            binary.flush()
+            return
+        sys.stdout.write(raw.decode("utf-8"))
+        sys.stdout.flush()
 
 
 def load_config() -> dict[str, Any]:
@@ -341,8 +354,11 @@ def db_path(root: Path | None = None) -> Path:
 
 
 def connect_db(root: Path | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path(root)))
+    # 并发识别只并行读取/调用 AI，写入仍很短；延长 SQLite 等锁时间，避免三个
+    # 任务同时完成时因默认 5 秒锁等待而误报失败。
+    conn = sqlite3.connect(str(db_path(root)), timeout=30)
     conn.row_factory = sqlite3.Row  # 既能按列名也能按下标取值，兼容旧的 row[0] 写法
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
@@ -380,8 +396,39 @@ def connect_db(root: Path | None = None) -> sqlite3.Connection:
     )
     conn.commit()
     ensure_recognition_columns(conn)
+    ensure_quick_scan_table(conn)
     templatepool.ensure_table(conn)
     return conn
+
+
+def ensure_quick_scan_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quick_scan_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id TEXT NOT NULL,
+          source_path TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          extension TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL DEFAULT 0,
+          file_created_at TEXT,
+          file_modified_at TEXT,
+          page_count INTEGER NOT NULL DEFAULT 1,
+          detected_type TEXT NOT NULL DEFAULT 'other',
+          detected_type_label TEXT NOT NULL DEFAULT '其他资料',
+          first_page_fingerprint TEXT,
+          preview_text TEXT,
+          status TEXT NOT NULL DEFAULT 'valid',
+          reason TEXT,
+          duplicate_of_id INTEGER,
+          imported_document_id INTEGER,
+          scanned_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_quick_scan_job ON quick_scan_items(job_id, id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_quick_scan_status ON quick_scan_items(job_id, status)")
+    conn.commit()
 
 
 def command_set_library_dir(args: dict[str, Any]) -> dict[str, Any]:
@@ -394,6 +441,19 @@ def command_set_library_dir(args: dict[str, Any]) -> dict[str, Any]:
     connect_db(target).close()
     save_config({"library_dir": str(target)})
     return {"library_dir": str(target), "db": str(db_path(target))}
+
+
+def command_scan_roots(args: dict[str, Any]) -> dict[str, Any]:
+    """返回本机可扫描盘符，供用户一键选择整盘。"""
+    roots = []
+    if os.name == "nt":
+        for code in range(ord("A"), ord("Z") + 1):
+            value = f"{chr(code)}:\\"
+            if os.path.isdir(value):
+                roots.append(value)
+    else:
+        roots.append("/")
+    return {"roots": roots}
 
 
 def file_sha256(path: Path) -> str:
@@ -477,21 +537,251 @@ def count_pages(path: Path) -> tuple[int, str]:
     return 1, "file_fallback"
 
 
-def iter_supported_files(root: Path, recursive: bool) -> list[Path]:
-    if recursive:
-        iterator = root.rglob("*")
-    else:
-        iterator = root.glob("*")
+SCAN_NOISE_DIRS = {
+    "$recycle.bin", "system volume information", "windows", "program files",
+    "program files (x86)", "programdata", "appdata", "node_modules", ".git", ".svn",
+    "__pycache__", ".venv", "venv", "cache", "caches", "temp", "tmp",
+}
+
+
+def iter_supported_files(
+    root: Path,
+    recursive: bool,
+    skip_noise: bool = False,
+    exclude_roots: list[Path] | None = None,
+) -> list[Path]:
+    """用 os.scandir 迭代枚举，扫描整个盘符时明显快于 pathlib.rglob。"""
     files: list[Path] = []
-    for path in iterator:
-        if not path.is_file():
+    excluded = [path.resolve() for path in (exclude_roots or [])]
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            resolved_current = current.resolve()
+            if any(resolved_current == path or resolved_current.is_relative_to(path) for path in excluded):
+                continue
+        except OSError:
             continue
-        if path.name.startswith("~$"):
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if recursive and not (skip_noise and entry.name.casefold() in SCAN_NOISE_DIRS):
+                                stack.append(Path(entry.path))
+                            continue
+                        if not entry.is_file(follow_symlinks=False) or entry.name.startswith("~$"):
+                            continue
+                        path = Path(entry.path)
+                        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                            files.append(path)
+                    except OSError:
+                        continue
+        except (OSError, PermissionError):
             continue
-        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            files.append(path)
     files.sort(key=lambda item: str(item).lower())
     return files
+
+
+def _quick_image_fingerprint(path: Path) -> tuple[str, bool]:
+    """返回首页感知指纹和是否疑似空白；相同内容改名后仍能被归为疑似重复。"""
+    rendered = docintel.render_pages_png(path, max_pages=1, dpi=110)
+    if not rendered:
+        return "", True
+    try:
+        from PIL import Image, ImageOps, ImageStat
+
+        with Image.open(io.BytesIO(rendered[0])) as source:
+            gray = ImageOps.grayscale(source)
+            sample = gray.copy()
+            sample.thumbnail((512, 512))
+            stat = ImageStat.Stat(sample)
+            pixels = list(getattr(sample, "get_flattened_data", sample.getdata)())
+            ink_ratio = sum(1 for value in pixels if value < 245) / max(1, len(pixels))
+            blank = float(stat.stddev[0] or 0) < 2.0 or ink_ratio < 0.001
+
+            small = gray.resize((9, 8))
+            values = list(getattr(small, "get_flattened_data", small.getdata)())
+            bits = []
+            for row in range(8):
+                offset = row * 9
+                bits.extend(values[offset + col] > values[offset + col + 1] for col in range(8))
+            number = sum((1 << index) for index, bit in enumerate(bits) if bit)
+            return f"image:{number:016x}", blank
+    except Exception:
+        return "", True
+
+
+def _quick_scan_fast(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    size = int(stat.st_size)
+    created = datetime.fromtimestamp(stat.st_ctime).isoformat(timespec="seconds")
+    modified = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
+    base = {
+        "source_path": str(path), "file_name": path.name,
+        "extension": path.suffix.lower().lstrip("."), "size_bytes": size,
+        "file_created_at": created, "file_modified_at": modified,
+        "page_count": 1, "detected_type": "other",
+        "detected_type_label": docintel.DOCUMENT_TYPES["other"],
+        "first_page_fingerprint": "", "preview_text": "[极速内容指纹]",
+        "status": "valid", "reason": "文件结构正常，已建立内容指纹",
+    }
+    if size <= 0:
+        return {**base, "status": "invalid", "reason": "空文件（0 字节）"}
+
+    suffix = path.suffix.lower()
+    with path.open("rb") as handle:
+        head = handle.read(256 * 1024)
+        tail = b""
+        if size > 320 * 1024:
+            handle.seek(max(0, size - 64 * 1024))
+            tail = handle.read(64 * 1024)
+    valid_magic = True
+    if suffix == ".pdf":
+        valid_magic = head.startswith(b"%PDF")
+    elif suffix in {".docx", ".xlsx", ".xlsm"}:
+        valid_magic = head.startswith(b"PK")
+    elif suffix == ".png":
+        valid_magic = head.startswith(b"\x89PNG\r\n\x1a\n")
+    elif suffix in {".jpg", ".jpeg"}:
+        valid_magic = head.startswith(b"\xff\xd8")
+    elif suffix == ".bmp":
+        valid_magic = head.startswith(b"BM")
+    elif suffix in {".tif", ".tiff"}:
+        valid_magic = head.startswith((b"II*\x00", b"MM\x00*"))
+    elif suffix == ".webp":
+        valid_magic = head.startswith(b"RIFF") and head[8:12] == b"WEBP"
+    if not valid_magic:
+        return {**base, "status": "invalid", "reason": "扩展名与文件内容不匹配或文件已损坏"}
+
+    digest = hashlib.sha256(size.to_bytes(8, "little") + head + tail).hexdigest()
+    base["first_page_fingerprint"] = "sample:" + digest
+    if suffix in TEXT_EXTENSIONS:
+        text = ""
+        for encoding in ("utf-8-sig", "gb18030"):
+            try:
+                text = head.decode(encoding).strip()
+                break
+            except UnicodeDecodeError:
+                continue
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if not normalized:
+            return {**base, "status": "invalid", "reason": "文本文件没有可读取内容"}
+        detected = docintel.detect_type(text)
+        base.update({
+            "detected_type": detected,
+            "detected_type_label": docintel.DOCUMENT_TYPES.get(detected, "其他资料"),
+            "preview_text": normalized[:240],
+        })
+    return base
+
+
+def _quick_scan_one(path: Path) -> dict[str, Any]:
+    base = _quick_scan_fast(path)
+    if base["status"] != "valid":
+        return base
+    suffix = path.suffix.lower()
+    text = docintel.extract_first_page_text(path)
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", text.lower())
+    if len(normalized) >= 8:
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        detected = docintel.detect_type(text)
+        base.update({
+            "detected_type": detected,
+            "detected_type_label": docintel.DOCUMENT_TYPES.get(detected, "其他资料"),
+            "first_page_fingerprint": "text:" + digest,
+            "preview_text": re.sub(r"\s+", " ", text).strip()[:240],
+        })
+        return base
+
+    if suffix in IMAGE_EXTENSIONS:
+        fingerprint, blank = _quick_image_fingerprint(path)
+        if fingerprint and not blank:
+            return {
+                **base, "first_page_fingerprint": fingerprint,
+                "preview_text": "[扫描件/图片首页]", "reason": "首页图像可读取，待正式视觉识别",
+            }
+        return {**base, "status": "invalid", "reason": "首页无法读取或疑似空白"}
+
+    if suffix == ".pdf":
+        return {**base, "preview_text": "[扫描版 PDF 首页]", "reason": "扫描版 PDF，已建立内容指纹，待正式视觉识别"}
+    return {**base, "reason": "文件结构正常，首页内容待正式识别"}
+
+
+def _confirm_quick_duplicates(conn: sqlite3.Connection, job_id: str) -> dict[str, int]:
+    """只对快速指纹碰撞组读取完整文件；完整 SHA-256 一致才标记为可删除重复件。"""
+    rows = conn.execute(
+        """
+        SELECT * FROM quick_scan_items
+        WHERE job_id = ? AND first_page_fingerprint IN (
+          SELECT first_page_fingerprint FROM quick_scan_items
+          WHERE job_id = ? AND first_page_fingerprint <> ''
+          GROUP BY first_page_fingerprint HAVING COUNT(*) > 1
+        )
+        ORDER BY id
+        """,
+        (job_id, job_id),
+    ).fetchall()
+    if rows:
+        paths = {int(row["id"]): Path(str(row["source_path"])) for row in rows}
+        digests: dict[int, str] = {}
+        errors: dict[int, str] = {}
+
+        def calculate(item: tuple[int, Path]) -> tuple[int, str, str]:
+            item_id, path = item
+            try:
+                return item_id, file_sha256(path), ""
+            except Exception as exc:
+                return item_id, "", str(exc)[:200]
+
+        with ThreadPoolExecutor(max_workers=min(4, len(paths)), thread_name_prefix="aidoc-hash") as executor:
+            for item_id, digest, error in executor.map(calculate, paths.items()):
+                if digest:
+                    digests[item_id] = digest
+                else:
+                    errors[item_id] = error or "无法读取完整文件"
+
+        groups: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            groups.setdefault(str(row["first_page_fingerprint"]), []).append(row)
+        for group in groups.values():
+            hash_heads: dict[str, int] = {}
+            first_id = int(group[0]["id"])
+            for row in group:
+                item_id = int(row["id"])
+                if item_id in errors:
+                    conn.execute(
+                        "UPDATE quick_scan_items SET status='error', reason=?, duplicate_of_id=NULL WHERE id=?",
+                        ("完整文件校验失败：" + errors[item_id], item_id),
+                    )
+                    continue
+                digest = digests[item_id]
+                if digest in hash_heads:
+                    conn.execute(
+                        """UPDATE quick_scan_items
+                           SET status='duplicate_exact', reason='完整 SHA-256 一致，确认是完全重复文件', duplicate_of_id=?
+                           WHERE id=?""",
+                        (hash_heads[digest], item_id),
+                    )
+                else:
+                    hash_heads[digest] = item_id
+                    if item_id == first_id:
+                        conn.execute(
+                            "UPDATE quick_scan_items SET status='valid', duplicate_of_id=NULL WHERE id=?", (item_id,)
+                        )
+                    else:
+                        conn.execute(
+                            """UPDATE quick_scan_items
+                               SET status='similar', reason='快速内容指纹相似，但完整哈希不同，请人工复核', duplicate_of_id=NULL
+                               WHERE id=?""",
+                            (item_id,),
+                        )
+        conn.commit()
+
+    stat_rows = conn.execute(
+        "SELECT status, COUNT(*) AS amount FROM quick_scan_items WHERE job_id=? GROUP BY status", (job_id,)
+    ).fetchall()
+    return {str(row["status"]): int(row["amount"]) for row in stat_rows}
 
 
 @dataclass
@@ -686,6 +976,320 @@ def command_scan_folder(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _date_boundary(value: Any, end_of_day: bool = False) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+        if end_of_day and len(text) <= 10:
+            parsed = parsed.replace(hour=23, minute=59, second=59)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def command_quick_scan(args: dict[str, Any]) -> dict[str, Any]:
+    """只读每份文件的首页做本地预检，不调用 AI、不扣积分、不自动删除。"""
+    require_unlocked()
+    source = Path(str(args.get("path") or "")).expanduser().resolve()
+    if not source.is_dir():
+        raise RuntimeError("请选择有效的扫描文件夹。")
+    recursive = bool(args.get("recursive", True))
+    scan_depth = str(args.get("scan_depth") or "fast")
+    if scan_depth not in {"fast", "preview"}:
+        scan_depth = "fast"
+    skip_noise = bool(args.get("skip_noise", True))
+    selected_exts = {
+        (str(value).lower() if str(value).startswith(".") else "." + str(value).lower())
+        for value in list(args.get("extensions") or [])
+    }
+    selected_exts &= SUPPORTED_EXTENSIONS
+    if not selected_exts:
+        selected_exts = set(SUPPORTED_EXTENSIONS)
+    try:
+        min_size = max(0, int(float(args.get("min_size_mb") or 0) * 1024 * 1024))
+    except (TypeError, ValueError):
+        min_size = 0
+    try:
+        max_size_value = float(args.get("max_size_mb") or 0)
+        max_size = int(max_size_value * 1024 * 1024) if max_size_value > 0 else None
+    except (TypeError, ValueError):
+        max_size = None
+    created_from = _date_boundary(args.get("created_from"))
+    created_to = _date_boundary(args.get("created_to"), end_of_day=True)
+
+    library_root = library_dir()
+    all_files = iter_supported_files(source, recursive, skip_noise=skip_noise, exclude_roots=[library_root])
+    files: list[Path] = []
+    filtered_out = 0
+    for path in all_files:
+        try:
+            stat = path.stat()
+        except OSError:
+            filtered_out += 1
+            continue
+        if path.suffix.lower() not in selected_exts:
+            filtered_out += 1
+            continue
+        if stat.st_size < min_size or (max_size is not None and stat.st_size > max_size):
+            filtered_out += 1
+            continue
+        if created_from is not None and stat.st_ctime < created_from:
+            filtered_out += 1
+            continue
+        if created_to is not None and stat.st_ctime > created_to:
+            filtered_out += 1
+            continue
+        files.append(path)
+
+    job_id = uuid.uuid4().hex
+    conn = connect_db(library_root)
+    old_jobs = conn.execute(
+        "SELECT job_id FROM quick_scan_items GROUP BY job_id ORDER BY MAX(id) DESC LIMIT -1 OFFSET 10"
+    ).fetchall()
+    for old_job in old_jobs:
+        conn.execute("DELETE FROM quick_scan_items WHERE job_id = ?", (old_job[0],))
+    if old_jobs:
+        conn.commit()
+    scanned_at = datetime.now().isoformat(timespec="seconds")
+    fingerprints: dict[str, tuple[int, str]] = {}
+    counts = {"valid": 0, "duplicate": 0, "invalid": 0, "error": 0}
+    completed = 0
+    workers = min(10 if scan_depth == "fast" else 2, max(1, len(files)))
+    worker_fn = _quick_scan_fast if scan_depth == "fast" else _quick_scan_one
+    emit({
+        "event": "aidoc_quick_scan", "job_id": job_id, "stage": "start",
+        "stage_label": (
+            f"正在极速扫描整个位置（{workers} 路内容指纹）…" if scan_depth == "fast"
+            else f"正在首页预检（{workers} 路）…"
+        ),
+        "done": 0, "total": len(files), "filtered_out": filtered_out,
+    })
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="aidoc-quick") as executor:
+            # 工作仍并发执行，但按已排序路径落库，确保每组重复文件的“保留件”稳定可预测。
+            futures = [(path, executor.submit(worker_fn, path)) for path in files]
+            for path, future in futures:
+                try:
+                    item = future.result()
+                except Exception as exc:
+                    stat = path.stat()
+                    item = {
+                        "source_path": str(path), "file_name": path.name,
+                        "extension": path.suffix.lower().lstrip("."),
+                        "size_bytes": int(stat.st_size),
+                        "file_created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(timespec="seconds"),
+                        "file_modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                        "page_count": 1, "detected_type": "other", "detected_type_label": "其他资料",
+                        "first_page_fingerprint": "", "preview_text": "",
+                        "status": "error", "reason": str(exc)[:240],
+                    }
+                fingerprint = str(item.get("first_page_fingerprint") or "")
+                duplicate_of_id = None
+                if fingerprint and item["status"] == "valid" and fingerprint in fingerprints:
+                    duplicate_of_id, duplicate_name = fingerprints[fingerprint]
+                    item["status"] = "duplicate"
+                    item["reason"] = (
+                        f"文件内容指纹与《{duplicate_name}》相同，疑似重复" if scan_depth == "fast"
+                        else f"首页内容与《{duplicate_name}》相同，疑似重复"
+                    )
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO quick_scan_items (
+                      job_id, source_path, file_name, extension, size_bytes,
+                      file_created_at, file_modified_at, page_count,
+                      detected_type, detected_type_label, first_page_fingerprint,
+                      preview_text, status, reason, duplicate_of_id, scanned_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id, item["source_path"], item["file_name"], item["extension"], item["size_bytes"],
+                        item["file_created_at"], item["file_modified_at"], item["page_count"],
+                        item["detected_type"], item["detected_type_label"], fingerprint,
+                        item["preview_text"], item["status"], item["reason"], duplicate_of_id, scanned_at,
+                    ),
+                )
+                item_id = int(cursor.lastrowid)
+                if fingerprint and fingerprint not in fingerprints and item["status"] == "valid":
+                    fingerprints[fingerprint] = (item_id, item["file_name"])
+                counts[item["status"]] += 1
+                completed += 1
+                if completed % 50 == 0:
+                    conn.commit()
+                emit({
+                    "event": "aidoc_quick_scan", "job_id": job_id, "stage": "scan",
+                    "stage_label": "正在建立文件内容指纹…" if scan_depth == "fast" else "正在读取每份文档的首页…", "done": completed,
+                    "total": len(files), "current_file": item["file_name"], **counts,
+                })
+        conn.commit()
+        emit({
+            "event": "aidoc_quick_scan", "job_id": job_id, "stage": "verify_duplicates",
+            "stage_label": "正在用完整 SHA-256 确认重复文件…", "done": completed,
+            "total": len(files), **counts,
+        })
+        confirmed = _confirm_quick_duplicates(conn, job_id)
+        counts = {
+            "valid": int(confirmed.get("valid", 0)),
+            "duplicate_exact": int(confirmed.get("duplicate_exact", 0)),
+            "similar": int(confirmed.get("similar", 0)),
+            "invalid": int(confirmed.get("invalid", 0)),
+            "error": int(confirmed.get("error", 0)),
+        }
+        # duplicate 保留为兼容字段，含义已收紧为“完整哈希确认重复”。
+        counts["duplicate"] = counts["duplicate_exact"]
+    finally:
+        conn.close()
+
+    emit({
+        "event": "aidoc_quick_scan", "job_id": job_id, "stage": "done",
+        "stage_label": "快速预检完成，请审核结果", "done": completed,
+        "total": len(files), "filtered_out": filtered_out, **counts,
+    })
+    return {
+        "job_id": job_id, "source": str(source), "total": len(files), "scan_depth": scan_depth,
+        "filtered_out": filtered_out, "workers": workers, **counts,
+    }
+
+
+def command_quick_scan_list(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        raise RuntimeError("缺少快速扫描任务编号。")
+    status = str(args.get("status") or "").strip()
+    page = max(1, int(args.get("page") or 1))
+    per_page = max(10, min(200, int(args.get("per_page") or 50)))
+    where = ["job_id = ?"]
+    params: list[Any] = [job_id]
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    conn = connect_db(library_dir())
+    clause = " AND ".join(where)
+    total = int(conn.execute(f"SELECT COUNT(*) FROM quick_scan_items WHERE {clause}", params).fetchone()[0])
+    page = min(page, max(1, (total + per_page - 1) // per_page))
+    rows = conn.execute(
+        f"SELECT * FROM quick_scan_items WHERE {clause} ORDER BY id LIMIT ? OFFSET ?",
+        [*params, per_page, (page - 1) * per_page],
+    ).fetchall()
+    stat_rows = conn.execute(
+        "SELECT status, COUNT(*) AS amount FROM quick_scan_items WHERE job_id = ? GROUP BY status", (job_id,)
+    ).fetchall()
+    conn.close()
+    return {
+        "items": [dict(row) for row in rows], "total": total, "page": page,
+        "per_page": per_page, "stats": {str(row["status"]): int(row["amount"]) for row in stat_rows},
+    }
+
+
+def command_quick_scan_mark(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    status = str(args.get("status") or "")
+    if status not in {"valid", "invalid"}:
+        raise RuntimeError("只能标记为有效或无效。")
+    ids = list(dict.fromkeys(int(value) for value in list(args.get("ids") or []) if str(value).isdigit()))[:1000]
+    if not ids:
+        return {"updated": 0}
+    conn = connect_db(library_dir())
+    placeholders = ",".join("?" for _ in ids)
+    reason = "用户审核后标记有效" if status == "valid" else "用户审核后标记无效"
+    cursor = conn.execute(
+        f"UPDATE quick_scan_items SET status = ?, reason = ? WHERE id IN ({placeholders}) AND status <> 'deleted'",
+        [status, reason, *ids],
+    )
+    conn.commit()
+    conn.close()
+    return {"updated": int(cursor.rowcount)}
+
+
+def command_quick_scan_delete(args: dict[str, Any]) -> dict[str, Any]:
+    """只删除无效或完整 SHA-256 已确认重复的源文件；相似件必须人工标为无效。"""
+    require_unlocked()
+    ids = list(dict.fromkeys(int(value) for value in list(args.get("ids") or []) if str(value).isdigit()))[:1000]
+    job_id = str(args.get("job_id") or "").strip()
+    all_discard = bool(args.get("all_discard")) and bool(job_id)
+    if not ids and not all_discard:
+        return {"deleted": 0, "failed": []}
+    conn = connect_db(library_dir())
+    if all_discard:
+        rows = conn.execute(
+            "SELECT * FROM quick_scan_items WHERE job_id = ? AND status IN ('invalid','duplicate_exact')", (job_id,)
+        ).fetchall()
+    else:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT * FROM quick_scan_items WHERE id IN ({placeholders}) AND status IN ('invalid','duplicate_exact')", ids
+        ).fetchall()
+    deleted = 0
+    failed: list[dict[str, Any]] = []
+    for row in rows:
+        path = Path(str(row["source_path"] or ""))
+        try:
+            if path.exists():
+                if not path.is_file():
+                    raise RuntimeError("目标不是文件")
+                path.unlink()
+            conn.execute("UPDATE quick_scan_items SET status='deleted', reason='用户审核后已删除' WHERE id=?", (row["id"],))
+            deleted += 1
+        except Exception as exc:
+            failed.append({"id": int(row["id"]), "file_name": str(row["file_name"]), "error": str(exc)[:200]})
+    conn.commit()
+    conn.close()
+    return {"deleted": deleted, "failed": failed}
+
+
+def command_quick_scan_import(args: dict[str, Any]) -> dict[str, Any]:
+    """审核后把有效项目正式导入资料库；此时才读取完整文件做精确 hash。"""
+    require_unlocked()
+    ids = list(dict.fromkeys(int(value) for value in list(args.get("ids") or []) if str(value).isdigit()))[:1000]
+    job_id = str(args.get("job_id") or "").strip()
+    all_valid = bool(args.get("all_valid")) and bool(job_id)
+    import_mode = str(args.get("import_mode") or "copy")
+    if import_mode not in {"copy", "index"}:
+        import_mode = "copy"
+    if not ids and not all_valid:
+        return {"created": 0, "duplicates": 0, "document_ids": [], "failed": []}
+    root = library_dir()
+    conn = connect_db(root)
+    if all_valid:
+        rows = conn.execute(
+            "SELECT * FROM quick_scan_items WHERE job_id = ? AND status = 'valid' ORDER BY id", (job_id,)
+        ).fetchall()
+    else:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT * FROM quick_scan_items WHERE id IN ({placeholders}) AND status = 'valid' ORDER BY id", ids
+        ).fetchall()
+    created = duplicates = 0
+    document_ids: list[int] = []
+    failed: list[dict[str, Any]] = []
+    for row in rows:
+        path = Path(str(row["source_path"] or ""))
+        try:
+            if not path.is_file():
+                raise RuntimeError("源文件已不存在")
+            pages, method = count_pages(path)
+            digest = file_sha256(path)
+            result = import_document(conn, path, root, digest, pages, method, import_mode)
+            created += int(result.created)
+            duplicates += int(not result.created)
+            document_ids.append(result.document_id)
+            conn.execute(
+                "UPDATE quick_scan_items SET status='imported', imported_document_id=?, reason=? WHERE id=?",
+                (result.document_id, "已正式导入" if result.created else "完整文件重复，已关联库内资料", row["id"]),
+            )
+        except Exception as exc:
+            failed.append({"id": int(row["id"]), "file_name": str(row["file_name"]), "error": str(exc)[:200]})
+    conn.commit()
+    conn.close()
+    return {
+        "created": created, "duplicates": duplicates,
+        "document_ids": list(dict.fromkeys(document_ids)), "failed": failed,
+    }
+
+
 def command_import_files(args: dict[str, Any]) -> dict[str, Any]:
     """把拖入/选中的具体文件导入资料库（不是扫文件夹）。args: {paths:[...], import_mode}
     默认 copy 模式：拷一份进库，原文件不动。复用 import_document + 同一套进度事件。"""
@@ -794,18 +1398,22 @@ def ensure_recognition_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-# 最近一次识别失败的真实原因（CLI/调用方诊断用；成功时为空串）
-LAST_RECOGNIZE_ERROR = ""
+def _set_recognize_error(message: str) -> None:
+    """保存当前识别线程的错误，避免并发任务互相覆盖失败原因。"""
+    RECOGNIZE_CONTEXT.last_error = message
+
+
+def _get_recognize_error() -> str:
+    return str(getattr(RECOGNIZE_CONTEXT, "last_error", "") or "")
 
 
 def recognize_via_server(mode: str, text: str, images: list[bytes], page_count: int, filename: str) -> dict[str, Any] | None:
     """把证据（文字或页图 base64）发服务器做 AI 识别，按页计费。
-    失败返回 None 并把真实原因写入 LAST_RECOGNIZE_ERROR，调用方退回纯规则识别。"""
-    global LAST_RECOGNIZE_ERROR
-    LAST_RECOGNIZE_ERROR = ""
+    失败返回 None 并保存当前线程的真实原因，调用方退回纯规则识别。"""
+    _set_recognize_error("")
     token = STATE.get("token") or ""
     if not token:
-        LAST_RECOGNIZE_ERROR = "未注册或离线（没有 token）"
+        _set_recognize_error("未注册或离线（没有 token）")
         return None
     body: dict[str, Any] = {
         "mode": mode,
@@ -825,20 +1433,20 @@ def recognize_via_server(mode: str, text: str, images: list[bytes], page_count: 
             msg = json.loads(detail).get("message") or detail
         except Exception:
             msg = ""
-        LAST_RECOGNIZE_ERROR = f"服务器 HTTP {exc.code}：{str(msg)[:240]}"
+        _set_recognize_error(f"服务器 HTTP {exc.code}：{str(msg)[:240]}")
         return None
     except Exception as exc:
-        LAST_RECOGNIZE_ERROR = f"{type(exc).__name__}：{str(exc)[:240]}"
+        _set_recognize_error(f"{type(exc).__name__}：{str(exc)[:240]}")
         return None
     if not isinstance(resp, dict):
-        LAST_RECOGNIZE_ERROR = "服务器返回不是 JSON 对象"
+        _set_recognize_error("服务器返回不是 JSON 对象")
         return None
     data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
     content = data.get("content") if isinstance(data, dict) else None
     if isinstance(content, str):
         parsed = docintel.parse_ai_json(content)
         if parsed is None:
-            LAST_RECOGNIZE_ERROR = "AI 返回的不是有效 JSON：" + content[:160]
+            _set_recognize_error("AI 返回的不是有效 JSON：" + content[:160])
         return parsed
     return data if isinstance(data, dict) else None
 
@@ -912,7 +1520,7 @@ def command_analyze_document(args: dict[str, Any]) -> dict[str, Any]:
             if ai is not None:
                 source = "vision_ai"
             else:
-                ai_error = LAST_RECOGNIZE_ERROR or "AI 识别未返回结果"
+                ai_error = _get_recognize_error() or "AI 识别未返回结果"
         else:
             ai_error = "无法把文件转成可识别的页面图像"
     elif len(text) >= 30:
@@ -921,7 +1529,7 @@ def command_analyze_document(args: dict[str, Any]) -> dict[str, Any]:
         if ai is not None:
             source = "text_ai"
         else:
-            ai_error = LAST_RECOGNIZE_ERROR or "AI 识别未返回结果"
+            ai_error = _get_recognize_error() or "AI 识别未返回结果"
     else:
         ai_error = "文件里几乎没有可识别的文字，也无法看图（已用规则粗分类）"
 
@@ -972,6 +1580,113 @@ def command_analyze_document(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def command_analyze_documents(args: dict[str, Any]) -> dict[str, Any]:
+    """有限并发识别多份资料；单份识别的模型、提示词和证据处理完全不变。"""
+    require_unlocked()
+    ids: list[int] = []
+    seen: set[int] = set()
+    for value in list(args.get("ids") or [])[:5000]:
+        try:
+            doc_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if doc_id > 0 and doc_id not in seen:
+            seen.add(doc_id)
+            ids.append(doc_id)
+    if not ids:
+        raise RuntimeError("请选择需要识别的资料。")
+
+    try:
+        requested_workers = int(args.get("workers") or 3)
+    except (TypeError, ValueError):
+        requested_workers = 3
+    workers = max(1, min(4, requested_workers, len(ids)))
+    # 先完成旧资料库的建表/补列，再登记可取消任务，避免初始化失败留下僵尸任务。
+    connect_db(library_dir()).close()
+    job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(args.get("job_id") or ""))[:80] or uuid.uuid4().hex
+    cancel_event = threading.Event()
+    job_state: dict[str, Any] = {"cancel": cancel_event, "futures": []}
+    with RECOGNITION_JOBS_LOCK:
+        if job_id in RECOGNITION_JOBS:
+            raise RuntimeError("识别任务编号重复，请重新开始。")
+        RECOGNITION_JOBS[job_id] = job_state
+    total = len(ids)
+    completed = 0
+    ai_ok = 0
+    ai_fail = 0
+    cancelled = 0
+    items_by_id: dict[int, dict[str, Any]] = {}
+
+    try:
+        emit({
+            "event": "aidoc_recognize_batch", "job_id": job_id,
+            "stage": "start", "stage_label": f"正在并发识别（{workers} 路）…",
+            "done": 0, "total": total, "workers": workers,
+        })
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="aidoc-recognize") as executor:
+            futures = {executor.submit(command_analyze_document, {"id": doc_id}): doc_id for doc_id in ids}
+            job_state["futures"] = list(futures)
+            for future in as_completed(futures):
+                doc_id = futures[future]
+                try:
+                    result = future.result()
+                    if bool(result.get("ai_available")):
+                        ai_ok += 1
+                    else:
+                        ai_fail += 1
+                    items_by_id[doc_id] = {"id": doc_id, "ok": True, "data": result}
+                    error = str(result.get("ai_error") or "")
+                except CancelledError:
+                    cancelled += 1
+                    error = "用户已取消"
+                    items_by_id[doc_id] = {"id": doc_id, "ok": False, "cancelled": True, "error": error}
+                except Exception as exc:
+                    ai_fail += 1
+                    error = str(exc)[:500]
+                    items_by_id[doc_id] = {"id": doc_id, "ok": False, "error": error}
+                completed += 1
+                stopping = cancel_event.is_set()
+                emit({
+                    "event": "aidoc_recognize_batch", "job_id": job_id,
+                    "stage": "cancelling" if stopping else "progress",
+                    "stage_label": "正在停止，等待已发出的识别结束…" if stopping
+                        else f"已完成 {completed}/{total}，{workers} 路并发识别中…",
+                    "done": completed, "total": total, "current_id": doc_id,
+                    "ok": bool(items_by_id[doc_id]["ok"]), "error": error, "workers": workers,
+                })
+
+        was_cancelled = cancel_event.is_set()
+        emit({
+            "event": "aidoc_recognize_batch", "job_id": job_id,
+            "stage": "cancelled" if was_cancelled else "done",
+            "stage_label": f"已取消，完成 {completed - cancelled} 份" if was_cancelled else "批量识别完成",
+            "done": completed, "total": total, "workers": workers,
+        })
+        return {
+            "job_id": job_id, "total": total, "done": completed, "workers": workers,
+            "ai_ok": ai_ok, "ai_fail": ai_fail, "cancelled": cancelled,
+            "was_cancelled": was_cancelled,
+            "items": [items_by_id[doc_id] for doc_id in ids],
+        }
+    finally:
+        with RECOGNITION_JOBS_LOCK:
+            RECOGNITION_JOBS.pop(job_id, None)
+
+
+def command_cancel_recognition(args: dict[str, Any]) -> dict[str, Any]:
+    """停止尚未开始的识别；已经发给 AI 的最多 workers 份会完成后退出。"""
+    require_unlocked()
+    job_id = str(args.get("job_id") or "").strip()
+    with RECOGNITION_JOBS_LOCK:
+        job = RECOGNITION_JOBS.get(job_id)
+        if not job:
+            return {"job_id": job_id, "found": False, "cancelled_pending": 0}
+        job["cancel"].set()
+        futures: list[Future[Any]] = list(job.get("futures") or [])
+        cancelled_pending = sum(1 for future in futures if future.cancel())
+    return {"job_id": job_id, "found": True, "cancelled_pending": cancelled_pending}
+
+
 def _row_to_suggestion(r: sqlite3.Row) -> dict[str, Any]:
     """DB 行 → 统一 suggestion 结构（给 project_to_profile 用）。"""
     try:
@@ -1002,6 +1717,24 @@ def command_document_meta(_: dict[str, Any]) -> dict[str, Any]:
         "list_columns": docintel.LIST_COLUMNS,
         "profiles": docintel.FIELD_PROFILES,
         "default_profile": docintel.DEFAULT_PROFILE,
+    }
+
+
+def command_unrecognized_documents(args: dict[str, Any]) -> dict[str, Any]:
+    """正式识别前返回全部未识别队列，不受前端当前分页限制。"""
+    require_unlocked()
+    limit = max(1, min(5000, int(args.get("limit") or 5000)))
+    conn = connect_db(library_dir())
+    rows = conn.execute(
+        "SELECT id, file_name, page_count FROM documents WHERE recognized_at IS NULL ORDER BY id ASC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return {
+        "items": [
+            {"id": int(row["id"]), "file_name": str(row["file_name"]), "page_count": int(row["page_count"] or 1)}
+            for row in rows
+        ],
     }
 
 
@@ -1111,7 +1844,7 @@ TYPE_FOLDER_NAMES = {
     "quality_report": "质检报告", "ccc_certificate": "3C证书",
     "production_license": "生产许可证", "hygiene_license": "卫生许可证",
     "product_filing": "产品备案", "food_license": "食品许可证",
-    "contract": "合同", "tax_certificate": "税务资料", "other": "其他资料",
+    "contract": "合同", "tax_certificate": "税务资料", "design_drawing": "设计稿图纸", "other": "其他资料",
 }
 
 
@@ -1506,14 +2239,24 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
             "reason": str(reasons.get(str(doc_id)) or reasons.get(doc_id) or "AI 档案秘书推荐")[:200],
         })
 
+    contract_job = response.get("contract_job") if isinstance(response.get("contract_job"), dict) else None
+    document_job = response.get("document_job") if isinstance(response.get("document_job"), dict) else None
+    reply = str(response.get("reply") or "我已经核对了当前库存。")
+    if contract_job or document_job:
+        reply = re.sub(r"已(?:经)?(?:生成|导出|制作)", "已准备生成", reply)
+    if not contract_job and not document_job and re.search(
+        r"已(?:经)?(?:生成|导出|制作).{0,40}(?:合同|文件|文书|PDF|DOCX)", reply, re.I,
+    ):
+        reply += "\n\n系统核验：AI 没有下发文件生成任务，本机尚未生成文件。请补充关键信息并明确要求生成 PDF。"
+
     return {
-        "reply": str(response.get("reply") or "我已经核对了当前库存。"),
+        "reply": reply,
         "materials": materials,
         "need_follow_up": bool(response.get("need_follow_up")),
         "missing_materials": list(response.get("missing_materials") or []),
         "watermark_text": str(response.get("watermark_text") or "")[:60],
-        "contract_job": response.get("contract_job") if isinstance(response.get("contract_job"), dict) else None,
-        "document_job": response.get("document_job") if isinstance(response.get("document_job"), dict) else None,
+        "contract_job": contract_job,
+        "document_job": document_job,
         "model": str(response.get("model") or ""),
         "training_notes_used": [note["title"] for note in training_notes],
         "templates_available": len(template_pool),
@@ -1609,11 +2352,12 @@ def command_generate_contract(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def command_generate_document(args: dict[str, Any]) -> dict[str, Any]:
-    """生成资源池覆盖不到时由 AI 综合起草的通用文书 DOCX。"""
+    """生成 AI 综合起草文书；合同固定落地 PDF，其它文书生成 DOCX。"""
     require_unlocked()
     job = args.get("job") if isinstance(args.get("job"), dict) else {}
     title = str(job.get("title") or "新文书").strip()[:100]
     content = str(job.get("content") or "").strip()[:80000]
+    document_type = str(job.get("document_type") or "other").strip().lower()
     if len(content) < 20:
         raise RuntimeError("AI 没有给出完整文书正文，暂不生成文件。")
     template_id = int(job.get("template_id") or 0)
@@ -1635,11 +2379,18 @@ def command_generate_document(args: dict[str, Any]) -> dict[str, Any]:
         conn.close()
 
     base_name = _safe_name(str(job.get("output_name") or title), 80) or "新文书"
-    if not base_name.lower().endswith(".docx"):
-        base_name += ".docx"
-    out_dir = Path(tempfile.gettempdir()) / ("文书生成_" + time.strftime("%Y%m%d-%H%M%S"))
+    is_contract = document_type in {"contract", "agreement", "purchase_contract", "sales_contract"} or "合同" in title
+    base_name = re.sub(r"\.(?:pdf|docx)$", "", base_name, flags=re.I)
+    base_name += ".pdf" if is_contract else ".docx"
+    out_dir = Path(tempfile.gettempdir()) / (
+        ("合同生成_" if is_contract else "文书生成_") + time.strftime("%Y%m%d-%H%M%S")
+    )
     output_path = out_dir / base_name
-    documentgen.generate_docx(title, content, output_path)
+    info = None
+    if is_contract:
+        info = contractgen.generate_text_pdf(title, content, output_path)
+    else:
+        documentgen.generate_docx(title, content, output_path)
     return {
         "file_path": str(output_path),
         "dir": str(out_dir),
@@ -1647,6 +2398,8 @@ def command_generate_document(args: dict[str, Any]) -> dict[str, Any]:
         "template_id": template_id,
         "template_name": template_name,
         "size_bytes": output_path.stat().st_size,
+        "format": "pdf" if is_contract else "docx",
+        "info": info,
     }
 
 
@@ -2249,7 +3002,13 @@ COMMANDS = {
     "set_password": command_set_password,
     "verify_password": command_verify_password,
     "set_library_dir": command_set_library_dir,
+    "scan_roots": command_scan_roots,
     "scan_folder": command_scan_folder,
+    "quick_scan": command_quick_scan,
+    "quick_scan_list": command_quick_scan_list,
+    "quick_scan_mark": command_quick_scan_mark,
+    "quick_scan_delete": command_quick_scan_delete,
+    "quick_scan_import": command_quick_scan_import,
     "import_files": command_import_files,
     "find_materials": command_find_materials,
     "assistant_chat": command_assistant_chat,
@@ -2271,13 +3030,24 @@ COMMANDS = {
     "cache_info": command_cache_info,
     "clear_cache": command_clear_cache,
     "analyze_document": command_analyze_document,
+    "analyze_documents": command_analyze_documents,
+    "cancel_recognition": command_cancel_recognition,
     "document_meta": command_document_meta,
+    "unrecognized_documents": command_unrecognized_documents,
     "list_documents": command_list_documents,
     "get_document": command_get_document,
     "confirm_document": command_confirm_document,
     "delete_document": command_delete_document,
     "library_summary": command_library_summary,
 }
+
+
+def _execute_request(request_id: Any, cmd: str, args: dict[str, Any]) -> None:
+    try:
+        data = COMMANDS[cmd](args)
+        emit({"id": request_id, "ok": True, "data": data})
+    except Exception as exc:
+        emit({"id": request_id, "ok": False, "error": str(exc)})
 
 
 def main() -> None:
@@ -2296,8 +3066,16 @@ def main() -> None:
             args = message.get("args") or {}
             if cmd not in COMMANDS:
                 raise RuntimeError(f"未知命令：{cmd}")
-            data = COMMANDS[cmd](args)
-            emit({"id": request_id, "ok": True, "data": data})
+            # 批量识别放到后台线程，主循环才能继续接收“取消识别”命令。
+            if cmd == "analyze_documents":
+                threading.Thread(
+                    target=_execute_request,
+                    args=(request_id, cmd, args),
+                    name=f"aidoc-request-{request_id}",
+                    daemon=False,
+                ).start()
+            else:
+                _execute_request(request_id, cmd, args)
         except Exception as exc:
             emit({"id": locals().get("request_id"), "ok": False, "error": str(exc)})
 

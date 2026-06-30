@@ -14,17 +14,20 @@ from typing import Any
 import fitz
 
 
-def _font_path() -> Path:
+def _font_path() -> Path | None:
     candidates = [
         Path("C:/Windows/Fonts/msyh.ttc"),
         Path("C:/Windows/Fonts/simsun.ttc"),
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/Deng.ttf"),
         Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
         Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
     ]
     for path in candidates:
         if path.exists():
             return path
-    raise RuntimeError("系统缺少可用于生成中文合同的字体。")
+    # PyMuPDF 自带简体中文基础字体，保证换到没有中文字体的新电脑仍能生成 PDF。
+    return None
 
 
 def _money(value: Any) -> Decimal:
@@ -120,8 +123,8 @@ class _PdfWriter:
         self.top = 38.0
         self.bottom = 40.0
         self.font_path = _font_path()
-        self.measure_font = fitz.Font(fontfile=str(self.font_path))
-        self.font_name = "contractfont"
+        self.measure_font = fitz.Font(fontfile=str(self.font_path)) if self.font_path else fitz.Font(fontname="china-s")
+        self.font_name = "contractfont" if self.font_path else "china-s"
         self.page: fitz.Page | None = None
         self.y = self.top
         self.new_page()
@@ -132,7 +135,8 @@ class _PdfWriter:
 
     def new_page(self) -> None:
         self.page = self.doc.new_page(width=self.page_width, height=self.page_height)
-        self.page.insert_font(fontname=self.font_name, fontfile=str(self.font_path))
+        if self.font_path:
+            self.page.insert_font(fontname=self.font_name, fontfile=str(self.font_path))
         self.page.draw_rect(
             fitz.Rect(28, 28, self.page_width - 28, self.page_height - 28),
             color=(0.88, 0.9, 0.89), width=0.6,
@@ -168,7 +172,7 @@ class _PdfWriter:
             assert self.page is not None
             self.page.insert_text(
                 (self.left + indent, self.y + size), line,
-                fontname=self.font_name, fontfile=str(self.font_path), fontsize=size, color=color,
+                fontname=self.font_name, fontfile=str(self.font_path) if self.font_path else None, fontsize=size, color=color,
             )
             self.y += line_height
         self.y += gap
@@ -179,7 +183,7 @@ class _PdfWriter:
         assert self.page is not None
         self.page.insert_text(
             ((self.page_width - width) / 2, self.y + size), text,
-            fontname=self.font_name, fontfile=str(self.font_path), fontsize=size, color=(0.05, 0.12, 0.17),
+            fontname=self.font_name, fontfile=str(self.font_path) if self.font_path else None, fontsize=size, color=(0.05, 0.12, 0.17),
         )
         self.y += 33
 
@@ -188,7 +192,7 @@ class _PdfWriter:
         assert self.page is not None
         self.page.insert_text(
             (self.page_width - self.right - width, self.y + size), text,
-            fontname=self.font_name, fontfile=str(self.font_path), fontsize=size,
+            fontname=self.font_name, fontfile=str(self.font_path) if self.font_path else None, fontsize=size,
         )
         self.y += size * 1.7
 
@@ -235,7 +239,7 @@ class _PdfWriter:
                     text_x = x + max(4, (widths[col_index] - text_w) / 2)
                     self.page.insert_text(
                         (text_x, text_y), line, fontname=self.font_name,
-                        fontfile=str(self.font_path), fontsize=size,
+                        fontfile=str(self.font_path) if self.font_path else None, fontsize=size,
                     )
                     text_y += line_h
                 x += widths[col_index]
@@ -256,7 +260,7 @@ class _PdfWriter:
             for index, line in enumerate([first_line, "法定代表人：", "或授权代表：", "日期："]):
                 self.page.insert_text(
                     (x, self.y + size + index * line_h), line,
-                    fontname=self.font_name, fontfile=str(self.font_path), fontsize=size,
+                    fontname=self.font_name, fontfile=str(self.font_path) if self.font_path else None, fontsize=size,
                 )
         self.y += line_h * 4 + 10
         self.text("附件：", size=9.3, gap=0)
@@ -264,8 +268,13 @@ class _PdfWriter:
     def save(self, metadata: dict[str, str]) -> None:
         self.doc.set_metadata(metadata)
         self.output.parent.mkdir(parents=True, exist_ok=True)
-        self.doc.save(str(self.output), garbage=4, deflate=True)
-        self.doc.close()
+        # Some Windows/Python combinations cannot pass a Unicode path to
+        # PyMuPDF. Build the PDF in memory, then let pathlib write the bytes.
+        try:
+            payload = self.doc.tobytes(garbage=4, deflate=True)
+        finally:
+            self.doc.close()
+        self.output.write_bytes(payload)
 
 
 def generate_contract_pdf(
@@ -428,3 +437,38 @@ def generate_contract_pdf(
         "payment_terms": payment_terms,
         "verified_fields": verified_fields,
     }
+
+
+def generate_text_pdf(title: str, content: str, output_path: Path) -> dict[str, Any]:
+    """把 AI 已给出的完整合同/文书正文可靠落地为 PDF，不依赖 Office 或外装字体。"""
+    heading = str(title or "新文书").strip()[:100]
+    body = str(content or "").strip()
+    if len(body) < 20:
+        raise RuntimeError("文书正文过短，无法生成 PDF。")
+    writer = _PdfWriter(output_path)
+    writer.title(heading)
+    lines = body.splitlines()
+    if lines and lines[0].strip() == heading:
+        lines = lines[1:]
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            writer.text("", size=9.5, gap=4)
+        elif re.match(r"^(第[一二三四五六七八九十百]+[条章节]|[一二三四五六七八九十]+、|\d+[.、])", line):
+            writer.heading(line)
+        else:
+            writer.text(line, size=10.2, gap=4, indent=18)
+    writer.save({
+        "title": heading,
+        "subject": "由好办法 AI 档案秘书生成",
+        "author": "好办法 AI 档案管理",
+        "keywords": "合同,文书,档案",
+    })
+    if not output_path.exists() or output_path.stat().st_size < 1000:
+        raise RuntimeError("PDF 文件生成失败。")
+    check = fitz.open(str(output_path))
+    try:
+        page_count = len(check)
+    finally:
+        check.close()
+    return {"page_count": page_count, "font": "system" if _font_path() else "builtin-china-s"}

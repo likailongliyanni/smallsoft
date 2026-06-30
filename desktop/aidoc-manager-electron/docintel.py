@@ -36,6 +36,7 @@ DOCUMENT_TYPES = {
     "household_register": "户口簿/常住人口登记卡",
     "graduation_certificate": "毕业证书",
     "degree_certificate": "学位证书",
+    "design_drawing": "设计稿/图纸",
     "other": "其他资料",
 }
 
@@ -84,6 +85,14 @@ FIELD_PROFILES: dict[str, list[dict[str, str]]] = {
         {"label": "内容简述", "source": "applicable_scope"},
         {"label": "有效期起", "source": "issued_at"},
         {"label": "有效期止", "source": "expires_at"},
+    ],
+    "design_drawing": [
+        {"label": "项目/场所", "source": "extra:project_name"},
+        {"label": "设计位置", "source": "applicable_scope"},
+        {"label": "图纸类型", "source": "extra:drawing_type"},
+        {"label": "图号/版本", "source": "certificate_no"},
+        {"label": "设计单位", "source": "company_name"},
+        {"label": "设计日期", "source": "issued_at"},
     ],
     "trademark_certificate": [
         {"label": "商标名称", "source": "brand"},
@@ -182,6 +191,10 @@ EXTRA_FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
         {"key": "party_c", "label": "丙方", "type": "text"},
         {"key": "contract_type", "label": "类型", "type": "text"},
     ],
+    "design_drawing": [
+        {"key": "project_name", "label": "项目/场所", "type": "text"},
+        {"key": "drawing_type", "label": "图纸类型", "type": "text"},
+    ],
     "identity_card": [
         {"key": "person_name", "label": "姓名", "type": "text"},
         {"key": "sex", "label": "性别", "type": "text"},
@@ -229,6 +242,7 @@ TYPE_KEYWORDS: dict[str, list[str]] = {
     "household_register": ["常住人口登记卡", "居民户口簿", "户主或与户主关系", "何时由何地迁来本市"],
     "graduation_certificate": ["毕业证书", "普通高等学校", "修完教学计划规定的全部课程", "准予毕业"],
     "degree_certificate": ["学位证书", "学位条例", "授予", "学士学位", "硕士学位", "博士学位"],
+    "design_drawing": ["设计稿", "设计方案", "装修设计", "空间设计", "效果图", "平面图", "施工图", "立面图", "布置图", "布局图", "图号", "设计单位", "项目名称"],
 }
 
 
@@ -236,18 +250,19 @@ def extraction_instruction() -> str:
     """识别提示词（字段对齐「版面样式.xlsx」）。"""
     types = "，".join(f"{k}={v}" for k, v in DOCUMENT_TYPES.items())
     return (
-        "你是企业及人员资料库的文档管理员。图片可能横置或倒置，请先按文字方向理解画面，再判断证件类型并提取结构化字段；若看到内容相同但方向不同的图片，它们是同一张照片的方向候选，只识别一次。只输出 JSON，不要解释、不要 Markdown。\n\n"
+        "你是企业及人员资料库的文档管理员。图片可能横置或倒置，请先按文字方向理解画面，再判断证件类型并提取结构化字段；若看到内容相同但方向不同的图片，它们是同一张照片的方向候选，只识别一次。遇到平面图、效果图、施工图、门头/店铺/办公室等空间设计画面时，至少要识别为 design_drawing，并根据画面文字判断项目和具体设计位置。只输出 JSON，不要解释、不要 Markdown。\n\n"
         f"可选资料类型(document_type 取等号左边的代码)：{types}\n\n"
         "统一顶层字段（所有类型都尽量填）：\n"
-        "- company_name 归属公司：营业执照填公司名称；合同填甲方；商标证/质检/3C 填归属公司/注册人；授权书填授权方。\n"
-        "- certificate_no 证件编号：营业执照填统一社会信用代码/税号；合同填合同编号；商标证/授权书/质检/3C 填证书编号。\n"
+        "- company_name 归属公司：营业执照填公司名称；合同填甲方；商标证/质检/3C 填归属公司/注册人；授权书填授权方；设计稿填设计单位。\n"
+        "- certificate_no 证件编号：营业执照填统一社会信用代码/税号；合同填合同编号；商标证/授权书/质检/3C 填证书编号；设计稿填图号或版本号。\n"
         "- brand 品牌：商标证填商标名称；授权书填授权品牌；其它无则留空。\n"
         "- issuer：合同填乙方；授权书填被授权方；质检报告填检测机构；3C 填出具机构。\n"
-        "- applicable_scope：营业执照填经营范围；合同填内容简述；授权书填授权内容；质检报告填检测商品名；3C 填商品名。\n"
-        "- issued_at 有效期起 / expires_at 有效期止：营业执照=注册时间/到期时间；其它=证件有效期起止；授权书=授权期限起止；质检报告若只有报告日期则填 issued_at。\n\n"
+        "- applicable_scope：营业执照填经营范围；合同填内容简述；授权书填授权内容；质检报告填检测商品名；3C 填商品名；设计稿必须填具体设计位置，如门头、前厅、二楼办公室、A区展厅。\n"
+        "- issued_at 有效期起 / expires_at 有效期止：营业执照=注册时间/到期时间；其它=证件有效期起止；授权书=授权期限起止；质检报告若只有报告日期则填 issued_at；设计稿日期填 issued_at。\n\n"
         "各类型专属字段放进 extra_fields（对象，只填下面列出的 key，没有就不填）：\n"
         "- business_license 营业执照：registered_capital(注册金)、legal_representative(法人)、address(地址)。\n"
         "- contract 合同：party_c(丙方)、contract_type(合同类型，如采购/服务/代理)。\n"
+        "- design_drawing 设计稿/图纸：project_name(项目或场所名称)、drawing_type(图纸类型，如平面图/效果图/施工图)；applicable_scope 必须填写从画面文字判断出的设计位置。看不清具体位置时填“位置未识别”，不能把设计稿归为 other。\n"
         "- identity_card 居民身份证：person_name(姓名)、sex(性别)、nation(民族)、birth_date(出生日期)、address(住址)；certificate_no 填公民身份号码，issuer 填签发机关，有效期限填 issued_at/expires_at。身份证正面或背面都归此类型。\n"
         "- household_register 户口簿/常住人口登记卡：person_name(姓名)、relationship(与户主关系)、sex(性别)、nation(民族)、birth_date(出生日期)、native_place(籍贯)、address(住址)；certificate_no 填公民身份号码。\n"
         "- graduation_certificate 毕业证书：person_name(姓名)、major(专业)、education_level(学历层次)、study_type(学习形式)；issuer 填学校，certificate_no 填证书编号，issued_at 填毕业日期。\n"
@@ -261,6 +276,17 @@ def extraction_instruction() -> str:
 # ───────────────────────── 取证据：文字 / 页图 ─────────────────────────
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+TEXT_EXTS = {".txt", ".csv", ".md", ".markdown", ".json", ".xml", ".rtf", ".log"}
+
+
+def _read_text_file(path: Path, limit: int | None = None) -> str:
+    raw = path.read_bytes() if limit is None else path.read_bytes()[:limit]
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return raw.decode(encoding).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="ignore").strip()
 
 
 def extract_text(path: Path) -> str:
@@ -277,8 +303,8 @@ def extract_text(path: Path) -> str:
             from docx import Document
             document = Document(str(path))
             return "\n".join(p.text for p in document.paragraphs).strip()
-        if suffix in {".txt", ".csv"}:
-            return path.read_text("utf-8", errors="ignore").strip()
+        if suffix in TEXT_EXTS:
+            return _read_text_file(path)
         if suffix in {".xlsx", ".xlsm"}:
             import openpyxl
             wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
@@ -288,6 +314,64 @@ def extract_text(path: Path) -> str:
                     parts.append(" ".join(str(c) for c in row if c is not None))
             wb.close()
             return "\n".join(parts).strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def extract_first_page_text(path: Path, limit: int = 12000) -> str:
+    """快速预检只读取第一页面/首个工作表/文档开头，不遍历完整文件。"""
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".pdf":
+            # 快速预检使用纯 Python 解析，避免全盘并发时单个损坏 PDF 触发原生库崩溃。
+            from pypdf import PdfReader
+            reader = PdfReader(str(path), strict=False)
+            return ((reader.pages[0].extract_text() or "") if reader.pages else "").strip()[:limit]
+        if suffix == ".docx":
+            from docx import Document
+            document = Document(str(path))
+            parts: list[str] = []
+            chars = 0
+            for paragraph in document.paragraphs:
+                value = paragraph.text.strip()
+                if value:
+                    parts.append(value)
+                    chars += len(value)
+                if chars >= limit:
+                    break
+            if chars < limit:
+                for table in document.tables[:3]:
+                    for row in table.rows[:30]:
+                        value = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if value:
+                            parts.append(value)
+                            chars += len(value)
+                        if chars >= limit:
+                            break
+                    if chars >= limit:
+                        break
+            return "\n".join(parts)[:limit]
+        if suffix in {".xlsx", ".xlsm"}:
+            import openpyxl
+            workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+            try:
+                if not workbook.worksheets:
+                    return ""
+                parts = []
+                chars = 0
+                for row in workbook.worksheets[0].iter_rows(max_row=100, max_col=30, values_only=True):
+                    value = " ".join(str(cell) for cell in row if cell is not None).strip()
+                    if value:
+                        parts.append(value)
+                        chars += len(value)
+                    if chars >= limit:
+                        break
+                return "\n".join(parts)[:limit]
+            finally:
+                workbook.close()
+        if suffix in TEXT_EXTS:
+            return _read_text_file(path, max(limit * 4, 65536))[:limit]
     except Exception:
         return ""
     return ""
@@ -425,6 +509,32 @@ def rule_suggestion(text: str) -> dict[str, Any]:
     dates = extract_dates(text)
     cert_no = extract_cert_no(text)
     company = extract_by_labels(text, ["公司名称", "单位名称", "企业名称", "注册人", "委托单位", "授权方"])
+    applicable_scope = ""
+    extra_fields: dict[str, Any] = {}
+    if doc_type == "design_drawing":
+        company = company or extract_by_labels(text, ["设计单位", "设计公司", "设计机构"])
+        cert_no = cert_no or extract_by_labels(text, ["图号", "图纸编号", "版本号", "版本"])
+        project_name = extract_by_labels(text, ["项目名称", "工程名称", "场所名称", "项目"])
+        applicable_scope = extract_by_labels(text, ["设计位置", "设计部位", "空间位置", "区域", "位置", "部位"])
+        drawing_type = next(
+            (word for word in ["总平面图", "平面图", "效果图", "施工图", "立面图", "布置图", "布局图", "设计稿"] if word in text),
+            "设计稿",
+        )
+        if not applicable_scope:
+            spatial = re.search(
+                r"([A-Za-z0-9\u4e00-\u9fff·（）()\-]{0,30}(?:门头|前厅|大厅|办公室|会议室|展厅|店铺|门店|柜台|楼层|一楼|二楼|三楼|A区|B区))"
+                r"\s*(?:总平面图|平面图|效果图|施工图|立面图|布置图|布局图|设计稿|设计方案)",
+                text,
+                re.I,
+            )
+            if spatial:
+                applicable_scope = spatial.group(1).strip(" ：:，,。")
+        applicable_scope = applicable_scope or "位置未识别"
+        extra_fields = {
+            key: value
+            for key, value in {"project_name": project_name, "drawing_type": drawing_type}.items()
+            if value
+        }
     confidence = 30
     if doc_type != "other":
         confidence += 20
@@ -440,8 +550,8 @@ def rule_suggestion(text: str) -> dict[str, Any]:
         "issuer": "",
         "issued_at": dates[0] if dates else "",
         "expires_at": dates[-1] if len(dates) > 1 else "",
-        "applicable_scope": "",
-        "extra_fields": {},
+        "applicable_scope": applicable_scope,
+        "extra_fields": extra_fields,
         "tags": [t for t in [DOCUMENT_TYPES.get(doc_type), company] if t],
         "ai_summary": "",
         "ai_confidence": min(70, confidence),

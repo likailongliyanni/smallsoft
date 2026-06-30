@@ -5,11 +5,27 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
-const port = 5176
+const viteCli = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js')
+const electronCli = path.join(root, 'node_modules', 'electron', 'cli.js')
 
-function command(name) {
-  return process.platform === 'win32' ? `${name}.cmd` : name
+function portIsFree(portNumber, host = '127.0.0.1') {
+  return new Promise((resolve) => {
+    const probe = createServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => probe.close(() => resolve(true)))
+    probe.listen(portNumber, host)
+  })
 }
+
+async function findAvailablePort(start = 5176, attempts = 20) {
+  for (let offset = 0; offset < attempts; offset++) {
+    const candidate = start + offset
+    if (await portIsFree(candidate)) return candidate
+  }
+  throw new Error(`No available development port in ${start}-${start + attempts - 1}`)
+}
+
+const port = await findAvailablePort()
 
 function waitForPort(portNumber, host = '127.0.0.1', timeoutMs = 30000) {
   const started = Date.now()
@@ -31,11 +47,10 @@ function waitForPort(portNumber, host = '127.0.0.1', timeoutMs = 30000) {
   })
 }
 
-const vite = spawn(command('npx'), ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+const vite = spawn(process.execPath, [viteCli, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
   cwd: root,
   stdio: 'inherit',
-  // Windows + 新版 Node 不允许 shell:false 直接 spawn .cmd（EINVAL），故用 shell:true
-  shell: true,
+  shell: false,
 })
 
 try {
@@ -46,14 +61,14 @@ try {
   process.exit(1)
 }
 
-const electron = spawn(command('npx'), ['electron', '.'], {
+const electron = spawn(process.execPath, [electronCli, '.'], {
   cwd: root,
   stdio: 'inherit',
   env: {
     ...process.env,
     AIDOC_DEV_SERVER_URL: `http://127.0.0.1:${port}`,
   },
-  shell: true,
+  shell: false,
 })
 
 electron.on('exit', (code) => {
