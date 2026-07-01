@@ -457,6 +457,7 @@
                 <span>整理缓存 {{ cache.count }} 个 · {{ fmtSize(cache.bytes) }}<em v-if="cache.over"> · 超 1G，建议清理</em></span>
                 <button class="ghost-btn training-entry" @click="openTemplateResources"><Files :size="14" /> 文书资源池 {{ resources.templates.length }}</button>
                 <button class="ghost-btn training-entry" @click="openTrainingNotes"><BookOpenCheck :size="14" /> 培训笔记 {{ training.notes.length }}</button>
+                <button class="ghost-btn training-entry" @click="openSpreadsheetTasks"><Table2 :size="14" /> 托管事项 {{ sheetTasks.active + sheetTasks.ready }}</button>
                 <button class="ghost-btn" :disabled="!cache.count" @click="clearCache"><Trash2 :size="14" /> 一键清理</button>
               </div>
             </div>
@@ -471,6 +472,7 @@
               <aside class="conversation-sidebar">
                 <div class="conversation-sidebar-head">
                   <button class="primary-btn small" @click="newConversation"><Plus :size="14" /> 新对话</button>
+                  <button class="icon-btn" title="导出已评分训练数据" @click="exportTrainingDataset"><BookOpenCheck :size="16" /></button>
                   <button class="icon-btn" title="打开本地聊天记录文件夹" @click="openConversationFolder"><FolderOpen :size="16" /></button>
                 </div>
                 <div v-if="conversations.error" class="conversation-error">{{ conversations.error }}</div>
@@ -479,19 +481,31 @@
                 <div v-for="group in chatGroups" :key="group.key" class="conversation-group">
                   <div class="conversation-group-label">{{ group.label }}</div>
                   <div v-for="item in group.items" :key="item.id" class="conversation-item" :class="{ active: conversations.currentId === item.id }">
-                    <button class="conversation-open" @click="loadConversation(item.id)">
+                    <div v-if="conversations.renamingId === item.id" class="conversation-rename" @click.stop>
+                      <input v-model="conversations.renameValue" maxlength="100"
+                        @keydown.enter.prevent="saveRenameConversation(item)"
+                        @keydown.esc.prevent="cancelRenameConversation" />
+                      <button title="保存名称" :disabled="conversations.renaming" @click="saveRenameConversation(item)"><CheckCircle2 :size="13" /></button>
+                      <button title="取消" :disabled="conversations.renaming" @click="cancelRenameConversation"><X :size="13" /></button>
+                    </div>
+                    <button v-else class="conversation-open" @click="loadConversation(item.id)">
                       <strong>{{ item.title }}</strong>
                       <small>{{ formatConversationAge(item.updated_at) }}</small>
                     </button>
-                    <div class="conversation-actions">
-                      <button title="修改名称" @click.stop="renameConversation(item)"><Pencil :size="12" /></button>
+                    <div v-if="conversations.renamingId !== item.id" class="conversation-actions">
+                      <button title="修改名称" @click.stop="startRenameConversation(item)"><Pencil :size="12" /></button>
                       <button title="删除对话" @click.stop="deleteConversation(item)"><Trash2 :size="12" /></button>
                     </div>
                   </div>
                 </div>
               </aside>
 
-              <div class="chat-main">
+              <div class="chat-main" :class="{ 'task-dragover': chat.dragOver }"
+                @dragover.prevent="chat.dragOver = true" @dragenter.prevent="chat.dragOver = true"
+                @dragleave.prevent="onChatDragLeave" @drop.prevent="onDropSpreadsheetTasks">
+                <div v-if="chat.dragOver" class="task-drop-overlay">
+                  <Table2 :size="36" /><strong>松手交给秘书</strong><span>支持 Excel、CSV，可一次拖入多个文件</span>
+                </div>
                 <div class="current-chat-title">
                   <strong>{{ conversations.currentTitle || '新对话' }}</strong>
                   <span>聊天内容自动保存在本地资料库</span>
@@ -502,12 +516,29 @@
                     <div class="chat-text">{{ m.text }}</div>
                     <div v-if="m.generatedDocument" class="generated-document">
                       <FileText :size="20" />
-                      <span><strong>{{ m.generatedDocument.file_name }}</strong><small>{{ m.generatedDocument.template_name ? `已使用资源池模板：${m.generatedDocument.template_name}` : '已根据本轮要求综合生成新文书' }}</small></span>
+                      <span><strong>{{ m.generatedDocument.file_name }}</strong><small>{{ m.generatedDocument.info?.supplier ? `新合同乙方：${m.generatedDocument.info.supplier}` : (m.generatedDocument.template_name ? `已使用资源池模板：${m.generatedDocument.template_name}` : '已根据本轮要求综合生成新文书') }}</small></span>
                       <button class="primary-btn small" @click="openGeneratedDocument(m)">打开文书</button>
                       <button class="ghost-btn small" @click="openPath(m.generatedDocument.dir)">打开文件夹</button>
                     </div>
+                    <div v-if="m.generatedSpreadsheet" class="generated-document spreadsheet-output">
+                      <Table2 :size="20" />
+                      <span><strong>{{ m.generatedSpreadsheet.file_name }}</strong><small>已整理 {{ m.generatedSpreadsheet.rows || 0 }} 条记录 · 原表未修改</small></span>
+                      <button class="primary-btn small" @click="openGeneratedSpreadsheet(m)">打开 Excel</button>
+                      <button class="ghost-btn small" @click="openPath(m.generatedSpreadsheet.dir)">打开文件夹</button>
+                    </div>
+                    <div v-if="m.managedTask" class="managed-task-card">
+                      <Table2 :size="19" />
+                      <span><strong>{{ m.managedTask.title }}</strong><small>{{ taskStatusLabel(m.managedTask.status) }} · {{ m.managedTask.files?.length || 0 }} 个表格</small></span>
+                      <button class="ghost-btn small" @click="showSpreadsheetTask(m.managedTask.id)">查看事项</button>
+                    </div>
                     <div v-if="m.trainingNotesUsed && m.trainingNotesUsed.length" class="training-hit">
                       已应用培训笔记：{{ m.trainingNotesUsed.join('、') }}
+                    </div>
+                    <div v-if="m.quickOptions && m.quickOptions.length" class="assistant-options">
+                      <button v-for="(option, optionIndex) in m.quickOptions" :key="optionIndex"
+                        type="button" :disabled="chat.busy" @click="chooseAssistantOption(option)">
+                        {{ assistantOptionLabel(option) }}
+                      </button>
                     </div>
                     <div v-if="m.organize && m.materials && m.materials.length" class="chat-materials">
                       <label v-for="x in m.materials" :key="x.id" class="chat-mat">
@@ -529,6 +560,24 @@
                       </div>
                       <p v-if="m.exportError" class="message-export-error">{{ m.exportError }}</p>
                     </div>
+                    <div v-if="m.role === 'ai' && m.rateable" class="answer-rating">
+                      <div class="answer-rating-row">
+                        <span>这次回答：</span>
+                        <button v-for="score in 5" :key="score" type="button"
+                          :class="{ active: score <= Number(m.rating || 0) }"
+                          :title="`${score}分 · ${ratingLabel(score)}`"
+                          @click="rateAnswer(m, score)">★</button>
+                        <em v-if="m.rating">{{ m.rating }}分 · {{ ratingLabel(m.rating) }}</em>
+                      </div>
+                      <div v-if="m.rating" class="answer-feedback">
+                        <textarea v-model="m.ratingFeedback" maxlength="2000" rows="2"
+                          placeholder="可选：哪里答得好、哪里需要改，具体纠错最有训练价值"
+                          @input="m.ratingSaved = false"></textarea>
+                        <button class="ghost-btn small" type="button" :disabled="m.ratingSaving"
+                          @click="saveAnswerFeedback(m)">{{ m.ratingSaving ? '保存中…' : '保存反馈' }}</button>
+                        <small v-if="m.ratingSaved">已保存到本地训练记录</small>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 </div>
@@ -546,12 +595,18 @@
                   class="watermark-input" maxlength="60" placeholder="可先留空，由秘书生成；也可以直接填写" />
                 </div>
 
+                <div v-if="chat.taskFiles.length" class="task-file-strip">
+                  <span class="task-file-hint"><Table2 :size="15" /> 将作为托管事项只读梳理</span>
+                  <span v-for="(file, index) in chat.taskFiles" :key="file" class="task-file-chip">
+                    {{ fileName(file) }}<button title="移除" @click="chat.taskFiles.splice(index, 1)"><X :size="12" /></button>
+                  </span>
+                </div>
                 <div class="chat-input">
                 <textarea v-model="chat.input" rows="5" :disabled="chat.busy"
-                  placeholder="告诉档案秘书要找什么、整理什么，或需要起草什么合同…（回车发送，Shift+回车换行）"
+                  :placeholder="chat.taskFiles.length ? '简单交代这批表是什么事情，例如：客户发来的六月对账表，先帮我梳理…' : '告诉档案秘书要找什么、整理什么，或需要起草什么合同…（回车发送，Shift+回车换行）'"
                   @keydown="onChatKeydown"></textarea>
-                <button class="ghost-btn chat-img" disabled title="发图片（后续上线）"><FileText :size="16" /></button>
-                <button class="primary-btn" :disabled="chat.busy || !chat.input.trim()" @click="sendChat">发送</button>
+                <button class="ghost-btn chat-img" :disabled="chat.busy" title="托管 Excel / CSV" @click="pickSpreadsheetTasks"><Paperclip :size="16" /> 表格</button>
+                <button class="primary-btn" :disabled="chat.busy || (!chat.input.trim() && !chat.taskFiles.length)" @click="sendChat">发送</button>
                 </div>
               </div>
             </div>
@@ -605,6 +660,58 @@
             </div>
           </form>
           <div v-else class="training-empty resource-placeholder">从左侧选择一个模板查看和编辑。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI 秘书 · 表格托管事项 -->
+    <div v-if="sheetTasks.open" class="modal-mask" @click.self="sheetTasks.open = false">
+      <div class="modal sheet-task-modal">
+        <header class="modal-head">
+          <div><strong>表格托管事项</strong><span>原表只读保存，秘书在本机后台梳理；不会自动进入正式档案库</span></div>
+          <button class="icon-btn" @click="sheetTasks.open = false"><X :size="18" /></button>
+        </header>
+        <div class="sheet-task-body">
+          <section class="sheet-task-list">
+            <div class="sheet-task-list-head">
+              <span>{{ sheetTasks.items.length }} 个事项 · {{ sheetTasks.active }} 个处理中</span>
+              <button class="secondary-btn small" :disabled="sheetTasks.loading" @click="loadSpreadsheetTasks">{{ sheetTasks.loading ? '刷新中…' : '刷新' }}</button>
+            </div>
+            <button v-for="item in sheetTasks.items" :key="item.id" class="sheet-task-item"
+              :class="{ active: sheetTasks.selected?.id === item.id }" @click="selectSpreadsheetTask(item.id)">
+              <span><strong>{{ item.title }}</strong><small>{{ item.files.map(file => file.original_name).join('、') }}</small></span>
+              <em :class="`status-${item.status}`">{{ taskStatusLabel(item.status) }}</em>
+            </button>
+            <div v-if="!sheetTasks.items.length" class="training-empty">还没有托管事项。回到聊天框点击“表格”，把客户或供应商发来的表交给秘书。</div>
+          </section>
+          <section v-if="sheetTasks.selected" class="sheet-task-detail">
+            <div class="sheet-task-title">
+              <div><strong>{{ sheetTasks.selected.title }}</strong><span>{{ formatTaskTime(sheetTasks.selected.created_at) }}</span></div>
+              <span class="task-status-badge" :class="`status-${sheetTasks.selected.status}`">{{ taskStatusLabel(sheetTasks.selected.status) }}</span>
+            </div>
+            <div class="sheet-task-instruction"><label>你交代的事情</label><p>{{ sheetTasks.selected.instruction || '先帮我梳理这些表格，回头我来找你。' }}</p></div>
+            <div class="sheet-task-files">
+              <label>托管文件</label>
+              <button v-for="file in sheetTasks.selected.files" :key="file.id" @click="openTaskFile(file)">
+                <Table2 :size="15" /><span>{{ file.original_name }}</span><small>{{ file.role === 'output' ? '整理结果' : fmtSize(file.size_bytes) }}</small>
+              </button>
+            </div>
+            <div class="sheet-task-result">
+              <label>秘书梳理结果</label>
+              <p v-if="['ready', 'complete', 'archived'].includes(sheetTasks.selected.status)">{{ sheetTasks.selected.summary }}</p>
+              <p v-else-if="sheetTasks.selected.status === 'error'" class="error-text">处理失败：{{ sheetTasks.selected.error }}</p>
+              <p v-else>秘书正在后台读取表头、工作表结构、空行、重复行和公式异常，请稍后刷新。</p>
+            </div>
+            <div class="sheet-task-actions">
+              <button class="ghost-btn" @click="openTaskFolder"><FolderOpen :size="14" /> 打开本地事项文件夹</button>
+              <span></span>
+              <button v-if="sheetTasks.selected.status === 'ready'" class="primary-btn" :disabled="sheetTasks.organizing" @click="organizeSpreadsheetTask">
+                {{ sheetTasks.organizing ? '正在生成…' : '生成商品字段整理版' }}
+              </button>
+              <button v-if="sheetTasks.selected.status !== 'archived'" class="secondary-btn" @click="archiveSpreadsheetTask">完成并归档</button>
+            </div>
+          </section>
+          <div v-else class="training-empty sheet-task-placeholder">从左侧选择一个事项查看。</div>
         </div>
       </div>
     </div>
@@ -704,6 +811,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LockKeyhole,
+  Paperclip,
   Pencil,
   Plus,
   RefreshCw,
@@ -711,6 +819,7 @@ import {
   ShoppingCart,
   ShieldCheck,
   Sparkles,
+  Table2,
   Trash2,
   Unlock,
   Wifi,
@@ -1338,7 +1447,14 @@ async function loadDocs() {
     if (lib.filterType) args.document_type = lib.filterType
     args.page = lib.page
     args.per_page = lib.perPage
-    const data = await backend('list_documents', args)
+    let data
+    try {
+      data = await backend('list_documents', args)
+    } catch (firstError) {
+      // 后台索引刚好在提交 SQLite 时可能短暂占锁；自动重试一次，不能把读取失败显示成空资料库。
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      data = await backend('list_documents', args)
+    }
     const docs = (data.documents || []).map((x) => ({ ...x, busy: false }))
     lib.docs = docs
     lib.stats = data.stats || lib.stats
@@ -1659,9 +1775,140 @@ async function openFinder() {
   loadCacheInfo()
   loadTrainingNotes()
   loadTemplateResources()
+  loadSpreadsheetTasks()
   await loadConversations()
   if (!chat.messages.length && conversations.items.length) await loadConversation(conversations.items[0].id)
   if (!chat.messages.length) newConversation()
+}
+
+const TASK_STATUS_LABELS = {
+  received: '已接收', processing: '正在梳理', ready: '待你查看',
+  complete: '已完成', archived: '已归档', error: '处理失败',
+}
+const sheetTasks = reactive({
+  open: false, loading: false, items: [], selected: null,
+  active: 0, ready: 0, dir: '', error: '', organizing: false,
+})
+
+function taskStatusLabel(status) {
+  return TASK_STATUS_LABELS[String(status || '')] || '未知状态'
+}
+function fileName(path) {
+  return String(path || '').split(/[\\/]/).pop() || String(path || '')
+}
+function formatTaskTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+async function loadSpreadsheetTasks() {
+  if (!state.unlocked || sheetTasks.loading) return
+  sheetTasks.loading = true
+  sheetTasks.error = ''
+  try {
+    const result = await backend('assistant_tasks_list', { limit: 100 })
+    sheetTasks.items = result.tasks || []
+    sheetTasks.active = result.active || 0
+    sheetTasks.ready = result.ready || 0
+    sheetTasks.dir = result.dir || ''
+    if (sheetTasks.selected) {
+      const latest = sheetTasks.items.find(item => item.id === sheetTasks.selected.id)
+      if (latest) sheetTasks.selected = latest
+    }
+  } catch (e) {
+    sheetTasks.error = e.message
+  } finally {
+    sheetTasks.loading = false
+  }
+}
+async function openSpreadsheetTasks() {
+  sheetTasks.open = true
+  await loadSpreadsheetTasks()
+  if (!sheetTasks.selected && sheetTasks.items.length) await selectSpreadsheetTask(sheetTasks.items[0].id)
+}
+async function selectSpreadsheetTask(id) {
+  try {
+    const result = await backend('assistant_task_get', { id })
+    sheetTasks.selected = result.task
+  } catch (e) {
+    sheetTasks.error = e.message
+  }
+}
+async function showSpreadsheetTask(id) {
+  sheetTasks.open = true
+  await loadSpreadsheetTasks()
+  await selectSpreadsheetTask(id)
+}
+async function pickSpreadsheetTasks() {
+  const paths = await api.pickFiles({ title: '选择要交给秘书托管的表格' })
+  addSpreadsheetTaskPaths(paths)
+}
+function addSpreadsheetTaskPaths(paths) {
+  const valid = (paths || []).filter(path => /\.(xlsx|xlsm|csv|tsv)$/i.test(path))
+  const rejected = (paths || []).length - valid.length
+  chat.taskFiles = [...new Set([...chat.taskFiles, ...valid])]
+  if (rejected) window.alert(`有 ${rejected} 个文件不是支持的表格格式，已跳过。\n目前支持 xlsx、xlsm、csv、tsv。`)
+}
+function onChatDragLeave(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) chat.dragOver = false
+}
+function onDropSpreadsheetTasks(event) {
+  chat.dragOver = false
+  const files = Array.from(event.dataTransfer?.files || [])
+  const paths = files.map(file => api.getPathForFile(file)).filter(Boolean)
+  addSpreadsheetTaskPaths(paths)
+}
+async function openTaskFile(file) {
+  let opened = await api.openExternalPath(file.original_path)
+  if (opened?.ok === false) opened = await api.openExternalPath(file.stored_path)
+  if (opened?.ok === false) window.alert(opened.error || '无法打开表格')
+}
+async function openTaskFolder() {
+  const target = sheetTasks.selected?.task_dir || sheetTasks.dir
+  if (target) await openPath(target)
+}
+async function archiveSpreadsheetTask() {
+  if (!sheetTasks.selected) return
+  const result = await backend('assistant_task_archive', { id: sheetTasks.selected.id })
+  sheetTasks.selected = result.task
+  await loadSpreadsheetTasks()
+}
+async function organizeSpreadsheetTask() {
+  if (!sheetTasks.selected || sheetTasks.organizing) return
+  sheetTasks.organizing = true
+  try {
+    const result = await backend('assistant_task_organize', { id: sheetTasks.selected.id })
+    sheetTasks.selected = result.task
+    await loadSpreadsheetTasks()
+    const opened = await api.openExternalPath(result.file_path)
+    if (opened?.ok === false) throw new Error(opened.error || '整理版 Excel 已生成，但无法打开')
+  } catch (e) {
+    sheetTasks.error = e.message
+    window.alert('整理失败：' + e.message)
+  } finally {
+    sheetTasks.organizing = false
+  }
+}
+function watchManagedTask(taskId, message, attempts = 0) {
+  if (!taskId || attempts >= 60) return
+  window.setTimeout(async () => {
+    try {
+      const result = await backend('assistant_task_get', { id: taskId })
+      message.managedTask = result.task
+      if (result.task.status === 'ready') {
+        message.text = `表格已经梳理好了。\n\n${result.task.summary}`
+        await loadSpreadsheetTasks()
+        return
+      }
+      if (result.task.status === 'error') {
+        message.text = `这份表格没有梳理成功：${result.task.error}`
+        return
+      }
+      watchManagedTask(taskId, message, attempts + 1)
+    } catch {
+      watchManagedTask(taskId, message, attempts + 1)
+    }
+  }, 1500)
 }
 
 // ── AI 资料员·聊天对话（微信机器人式：回车发送 / Shift+回车换行）──
@@ -1836,9 +2083,10 @@ async function deleteTrainingNote() {
   }
 }
 
-const CHAT_GREETING = '你好，我是你的 AI 档案秘书👋 可以帮你查找档案、整理材料，也可以根据要求起草合同内容。默认只查询和回答；需要导出材料时，请先勾选下方“需要整理文件”，还可以选择给导出副本添加水印。'
+const CHAT_GREETING = '你好，我是你的 AI 档案秘书👋 可以帮你查找档案、整理材料、起草合同，也可以替你托管客户或供应商发来的 Excel。把表交给我、简单说下是什么事情，我先在后台梳理，回头你再来找我。'
 const conversations = reactive({
   items: [], loading: false, currentId: '', currentTitle: '', dir: '', error: '',
+  renamingId: '', renameValue: '', renaming: false,
 })
 
 function weekStart(value) {
@@ -1896,7 +2144,8 @@ function newConversation() {
   conversations.currentTitle = '新对话'
   chat.messages = []
   chat.input = ''
-  pushMsg('ai', CHAT_GREETING)
+  chat.taskFiles = []
+  pushMsg('ai', CHAT_GREETING, [], { rateable: false })
 }
 
 function restoreSavedMessage(item) {
@@ -1909,6 +2158,16 @@ function restoreSavedMessage(item) {
     gathered: '', gathering: false, exportError: '', organize: Boolean(item.organize),
     useWatermark: Boolean(item.useWatermark), watermarkText: item.watermarkText || '',
     generatedDocument: item.generated_document || null,
+    generatedSpreadsheet: item.generated_spreadsheet || null,
+    managedTask: item.managed_task || null,
+    contractContext: item.contract_context || null,
+    rateable: item.role !== 'user' && item.rateable !== false && item.text !== CHAT_GREETING,
+    rating: Number(item.rating || 0),
+    ratingFeedback: item.rating_feedback || '',
+    ratedAt: item.rated_at || '',
+    ratingSaving: false,
+    ratingSaved: Boolean(item.rating),
+    quickOptions: Array.isArray(item.quick_options) ? item.quick_options : [],
   }
 }
 
@@ -1922,6 +2181,7 @@ async function loadConversation(id) {
     conversations.currentTitle = data.title || '未命名对话'
     chat.messages = (data.messages || []).map(restoreSavedMessage)
     chat.input = ''
+    chat.taskFiles = []
     nextTick(() => { const el = document.querySelector('.chat-scroll'); if (el) el.scrollTop = el.scrollHeight })
   } catch (e) {
     conversations.error = e.message
@@ -1944,15 +2204,33 @@ async function saveCurrentConversation() {
   await loadConversations()
 }
 
-async function renameConversation(item) {
-  const title = window.prompt('修改对话名称', item.title || '')
-  if (title === null || !title.trim()) return
+function startRenameConversation(item) {
+  conversations.renamingId = item.id
+  conversations.renameValue = item.title || ''
+  conversations.error = ''
+  nextTick(() => document.querySelector('.conversation-rename input')?.focus())
+}
+
+function cancelRenameConversation() {
+  if (conversations.renaming) return
+  conversations.renamingId = ''
+  conversations.renameValue = ''
+}
+
+async function saveRenameConversation(item) {
+  const title = conversations.renameValue.trim()
+  if (!title || conversations.renaming) return
+  conversations.renaming = true
   try {
-    await backend('assistant_conversation_rename', { id: item.id, title: title.trim() })
-    if (conversations.currentId === item.id) conversations.currentTitle = title.trim()
+    await backend('assistant_conversation_rename', { id: item.id, title })
+    if (conversations.currentId === item.id) conversations.currentTitle = title
+    conversations.renamingId = ''
+    conversations.renameValue = ''
     await loadConversations()
   } catch (e) {
     conversations.error = e.message
+  } finally {
+    conversations.renaming = false
   }
 }
 
@@ -1974,6 +2252,7 @@ async function openConversationFolder() {
 
 const chat = reactive({
   messages: [], input: '', busy: false,
+  taskFiles: [], dragOver: false,
   needOrganize: false, useWatermark: false, watermarkText: '',
 })
 let chatSeq = 0
@@ -1984,14 +2263,53 @@ function pushMsg(role, text, materials, extra = {}) {
     materials: (materials || []).map((m) => ({ ...m, picked: true })),
     gathered: '', gathering: false, exportError: '', organize: false, useWatermark: false, watermarkText: '',
     generatedDocument: null,
+    generatedSpreadsheet: null,
+    managedTask: null,
+    contractContext: null,
+    rateable: false,
+    rating: 0,
+    ratingFeedback: '',
+    ratedAt: '',
+    ratingSaving: false,
+    ratingSaved: false,
+    quickOptions: [],
     ...extra,
   })
   nextTick(() => { const el = document.querySelector('.chat-scroll'); if (el) el.scrollTop = el.scrollHeight })
   return chat.messages[chat.messages.length - 1]
 }
+async function submitSpreadsheetTask(text) {
+  const paths = [...chat.taskFiles]
+  const instruction = text || '先帮我梳理这些表格，回头我来找你。'
+  chat.input = ''
+  chat.taskFiles = []
+  pushMsg('user', `${instruction}\n\n托管表格：${paths.map(fileName).join('、')}`)
+  chat.busy = true
+  const reply = pushMsg('ai', '收到，我先把原表安全托管，在本机后台梳理。原文件不会被修改。', [], { rateable: false })
+  try {
+    const result = await backend('assistant_task_create', {
+      paths,
+      instruction,
+      conversation_id: conversations.currentId || '',
+    })
+    reply.managedTask = result.task
+    reply.text = '已经接下这件事了。我会先看工作表结构、字段、空行、重复数据和公式异常；你可以继续做别的，回头到“托管事项”里找我。'
+    await loadSpreadsheetTasks()
+    watchManagedTask(result.task.id, reply)
+  } catch (e) {
+    reply.text = '表格托管失败：' + e.message
+  } finally {
+    chat.busy = false
+    try { await saveCurrentConversation() } catch (e) { conversations.error = '聊天记录保存失败：' + e.message }
+  }
+}
 async function sendChat() {
   const text = chat.input.trim()
-  if (!text || chat.busy) return
+  if (chat.busy || (!text && !chat.taskFiles.length)) return
+  if (chat.taskFiles.length) {
+    await submitSpreadsheetTask(text)
+    return
+  }
   const options = {
     organize: Boolean(chat.needOrganize),
     useWatermark: Boolean(chat.needOrganize && chat.useWatermark),
@@ -2005,12 +2323,16 @@ async function sendChat() {
   } catch (e) {
     conversations.error = '聊天记录暂未保存：' + e.message
   }
-  const reply = pushMsg('ai', options.organize ? '正在核对并准备材料…' : '正在核对资料库…', [], options)
+  const reply = pushMsg('ai', options.organize ? '正在核对并准备材料…' : '正在核对资料库…', [], { ...options, rateable: false })
   try {
     const history = chat.messages
       .filter((m) => m !== reply)
       .slice(-12, -1)
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text }))
+      .map((m) => ({
+        role: m.role === 'ai' ? 'assistant' : 'user',
+        content: m.text,
+        contract_context: m.contractContext || undefined,
+      }))
     const r = await backend('assistant_chat', {
       message: text,
       history,
@@ -2019,8 +2341,13 @@ async function sendChat() {
       watermark_text: options.watermarkText,
     })
     reply.text = r.reply || '我已经核对了当前库存。'
+    reply.quickOptions = Array.isArray(r.quick_options) ? r.quick_options.slice(0, 4) : []
+    reply.rateable = r.rateable !== false
     reply.materials = options.organize ? (r.materials || []).map((x) => ({ ...x, picked: true })) : []
     if (r.contract_job) {
+      reply.contractContext = r.contract_job
+      // 模板原件只负责提供条款，不作为本轮结果展示，避免误把旧合同当成新合同打开。
+      reply.materials = reply.materials.filter((item) => item.id !== Number(r.contract_job.source_document_id || 0))
       reply.text += '\n\n正在根据库存模板生成新合同文件…'
       try {
         const generated = await backend('generate_contract', { job: r.contract_job })
@@ -2054,8 +2381,12 @@ async function sendChat() {
       chat.watermarkText = r.watermark_text
     }
     reply.trainingNotesUsed = r.training_notes_used || []
+    reply.generatedSpreadsheet = r.generated_spreadsheet || null
+    if (reply.generatedSpreadsheet) await loadSpreadsheetTasks()
   } catch (e) {
     reply.text = '出错了：' + e.message
+    reply.quickOptions = []
+    reply.rateable = false
   } finally {
     chat.busy = false
     try {
@@ -2069,6 +2400,53 @@ async function sendChat() {
 function onChatKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
 }
+function assistantOptionLabel(option) {
+  return typeof option === 'string' ? option : String(option?.label || option?.message || '')
+}
+async function chooseAssistantOption(option) {
+  if (chat.busy) return
+  const message = typeof option === 'string' ? option : String(option?.message || option?.label || '')
+  if (!message.trim()) return
+  chat.input = message.trim()
+  await sendChat()
+}
+const RATING_LABELS = ['', '需重做', '问题较多', '基本可用', '回答不错', '完全满意']
+function ratingLabel(score) {
+  return RATING_LABELS[Number(score) || 0] || ''
+}
+async function persistAnswerRating(msg) {
+  if (msg.ratingSaving) return
+  msg.ratingSaving = true
+  msg.ratingSaved = false
+  try {
+    await saveCurrentConversation()
+    msg.ratingSaved = true
+  } catch (e) {
+    conversations.error = '评分保存失败：' + e.message
+  } finally {
+    msg.ratingSaving = false
+  }
+}
+async function rateAnswer(msg, score) {
+  msg.rating = Number(score)
+  msg.ratedAt = new Date().toISOString()
+  await persistAnswerRating(msg)
+}
+async function saveAnswerFeedback(msg) {
+  if (!msg.rating) return
+  msg.ratedAt = new Date().toISOString()
+  await persistAnswerRating(msg)
+}
+async function exportTrainingDataset() {
+  try {
+    const result = await backend('assistant_training_export')
+    const opened = await api.openExternalPath(result.dir)
+    if (opened?.ok === false) throw new Error(opened.error || '无法打开导出文件夹')
+    window.alert(`已导出 ${result.count} 条已评分问答：\n${result.file_path}`)
+  } catch (e) {
+    window.alert('训练数据导出失败：' + e.message)
+  }
+}
 async function openGeneratedDocument(msg) {
   const path = msg.generatedDocument?.file_path
   if (!path) return
@@ -2076,6 +2454,15 @@ async function openGeneratedDocument(msg) {
   if (opened?.ok === false) {
     msg.generatedDocument = null
     msg.text += '\n\n生成的合同缓存已被清理，请重新生成。'
+  }
+}
+async function openGeneratedSpreadsheet(msg) {
+  const path = msg.generatedSpreadsheet?.file_path
+  if (!path) return
+  const opened = await api.openExternalPath(path)
+  if (opened?.ok === false) {
+    msg.generatedSpreadsheet = null
+    msg.text += '\n\n整理版 Excel 已被移动或删除，请重新生成。'
   }
 }
 async function gatherFromMsg(msg) {
@@ -2121,7 +2508,10 @@ onMounted(async () => {
     await registerDevice()
     // 提前载入各类型版面字段，保证详情页任何时候都能按类型显示不同字段。
     try { await loadMeta() } catch {}
-    if (state.unlocked) await refreshSummary()
+    if (state.unlocked) {
+      await refreshSummary()
+      if (state.libraryDir) backend('start_knowledge_index').catch(() => {})
+    }
   } finally {
     booting.value = false
   }

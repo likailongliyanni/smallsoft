@@ -114,6 +114,7 @@ function callBackend(cmd, args = {}) {
       : cmd === 'quick_scan' ? 30 * 60 * 1000
       : cmd === 'analyze_documents' ? 24 * 60 * 60 * 1000
       : cmd === 'analyze_document' ? 5 * 60 * 1000
+      : cmd === 'assistant_chat' ? 4 * 60 * 1000
       : 90 * 1000
     const timer = setTimeout(() => {
       if (pending.has(id)) {
@@ -174,6 +175,7 @@ ipcMain.handle('backend', async (_event, cmd, args) => {
     const data = await callBackend(cmd, args || {})
     return { ok: true, data }
   } catch (error) {
+    writeLog(`[backend command error] cmd=${cmd} error=${error?.stack || error?.message || String(error)}`)
     return { ok: false, error: error.message || String(error) }
   }
 })
@@ -191,7 +193,7 @@ ipcMain.handle('pickFiles', async (_event, options = {}) => {
   const result = await dialog.showOpenDialog({
     title: options.title || '选择要上传的文件',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm', 'txt', 'csv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'] }],
+    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm', 'txt', 'csv', 'tsv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'] }],
   })
   return result.canceled ? [] : result.filePaths
 })
