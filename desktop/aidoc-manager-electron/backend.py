@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import docintel
+import assistanttasks
 import contractgen
 import documentgen
 import knowledge
@@ -409,6 +410,7 @@ def connect_db(root: Path | None = None) -> sqlite3.Connection:
     ensure_quick_scan_table(conn)
     templatepool.ensure_table(conn)
     knowledge.ensure_tables(conn)
+    assistanttasks.ensure_tables(conn)
     return conn
 
 
@@ -2288,12 +2290,177 @@ def _assistant_fallback(message: str, error: str) -> dict[str, Any]:
     }
 
 
+def command_assistant_task_create(args: dict[str, Any]) -> dict[str, Any]:
+    """Accept spreadsheet files into the secretary's local task inbox."""
+    require_unlocked()
+    root = library_dir()
+    task = assistanttasks.create_task(
+        db_path(root),
+        root,
+        [str(value) for value in list(args.get("paths") or [])],
+        str(args.get("instruction") or "").strip(),
+        str(args.get("conversation_id") or "").strip(),
+    )
+    return {"task": task}
+
+
+def command_assistant_tasks_list(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    root = library_dir()
+    assistanttasks.resume_pending(db_path(root))
+    conn = connect_db(root)
+    try:
+        tasks = assistanttasks.list_tasks(conn, int(args.get("limit") or 100))
+    finally:
+        conn.close()
+    active = sum(item["status"] in {"received", "processing"} for item in tasks)
+    ready = sum(item["status"] == "ready" for item in tasks)
+    return {"tasks": tasks, "active": active, "ready": ready, "dir": str(root / ".assistant" / "tasks")}
+
+
+def command_assistant_task_get(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    conn = connect_db(library_dir())
+    try:
+        task = assistanttasks.get_task(conn, str(args.get("id") or ""))
+    finally:
+        conn.close()
+    return {"task": task}
+
+
+def command_assistant_task_archive(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    conn = connect_db(library_dir())
+    try:
+        task = assistanttasks.archive_task(conn, str(args.get("id") or ""))
+    finally:
+        conn.close()
+    return {"task": task}
+
+
+def command_assistant_task_organize(args: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    return assistanttasks.organize_product_catalog(db_path(library_dir()), str(args.get("id") or ""))
+
+
+def _assistant_local_task_reply(message: str, history: list[Any] | None = None) -> dict[str, Any] | None:
+    """Answer common task-status questions locally so they never wait on the network AI."""
+    task_reference = bool(re.search(r"(?:托管|表格|Excel|excel|CSV|csv|那个表|这张表|这表|的表|货盘表)", message))
+    export_shortcut = bool(re.fullmatch(r"\s*(?:导出|生成)(?:为)?\s*Excel\s*", message, re.I))
+    if not task_reference and not export_shortcut:
+        return None
+    conn = connect_db(library_dir())
+    try:
+        tasks = assistanttasks.list_tasks(conn, 20)
+    finally:
+        conn.close()
+    if not tasks:
+        return None
+    words = [word for word in re.split(r"[\s，。！？、,;；]+", message) if len(word) >= 2]
+    task = max(
+        tasks,
+        key=lambda item: (
+            sum(word.lower() in (item["title"] + " " + item["instruction"] + " " + " ".join(
+                file["original_name"] for file in item["files"]
+            )).lower() for word in words),
+            item["updated_at"],
+        ),
+    )
+    conn = connect_db(library_dir())
+    try:
+        task = assistanttasks.get_task(conn, task["id"])
+    finally:
+        conn.close()
+    context_parts = [message]
+    for item in list(history or [])[-8:]:
+        if isinstance(item, dict) and str(item.get("role") or "") in {"user", "human"}:
+            context_parts.append(str(item.get("content") or item.get("text") or ""))
+    request_context = "\n".join(context_parts)
+    requested_fields = [
+        field for field in ("商品名称", "品牌", "型号", "编码", "条码", "电商链接", "销售价格", "代发价格")
+        if field in request_context
+    ]
+    organize_requested = bool(re.search(
+        r"(?:整理整齐|整理出来|按.+(?:字段|栏目|列)|只保留|提取.+字段|导出(?:为)?\s*Excel|生成.+Excel)",
+        message,
+        re.I | re.S,
+    )) or export_shortcut
+    if organize_requested and (len(requested_fields) >= 2 or export_shortcut):
+        result = assistanttasks.organize_product_catalog(db_path(library_dir()), task["id"])
+        return {
+            "reply": (
+                f"已经真正生成整理版 Excel，共提取 {result['rows']} 条商品记录。"
+                "只保留商品名称、品牌、型号、编码、条码、电商链接、销售价格、代发价格；原表没有修改。"
+            ),
+            "materials": [], "need_follow_up": False, "missing_materials": [], "watermark_text": "",
+            "contract_job": None, "document_job": None, "generated_spreadsheet": {
+                "file_path": result["file_path"], "dir": result["dir"], "file_name": result["file_name"],
+                "rows": result["rows"], "missing": result["missing"],
+            },
+            "model": "local-sheet-organizer", "training_notes_used": [], "templates_available": 0,
+            "quick_options": [], "rateable": True, "response_kind": "spreadsheet_output",
+        }
+    if organize_requested and len(requested_fields) < 2:
+        return {
+            "reply": "可以真正整理并生成一个新 Excel，但我需要先知道保留哪些字段。原表会保持不动。",
+            "materials": [], "need_follow_up": True, "missing_materials": [], "watermark_text": "",
+            "contract_job": None, "document_job": None, "generated_spreadsheet": None,
+            "model": "local-sheet-organizer", "training_notes_used": [], "templates_available": 0,
+            "quick_options": [{
+                "label": "整理商品货盘",
+                "message": "请把这份表按商品名称、品牌、型号、编码、条码、电商链接、销售价格、代发价格整理出来，其他列不要",
+            }],
+            "rateable": True, "response_kind": "spreadsheet_clarification",
+        }
+    if not re.search(r"(?:怎么样|咋样|好了吗|完成了吗|进度|结果|梳理|处理到哪|看完了吗|刚才|之前|整理)", message):
+        return None
+    status = task["status"]
+    generated_spreadsheet = None
+    if status == "ready":
+        reply = f"这件表格事项已经梳理好了：\n\n{task['summary']}"
+        options = [
+            {"label": "继续查异常", "message": f"继续分析托管事项“{task['title']}”里需要我注意的异常"},
+            {"label": "暂时不用", "message": "好的，先放在托管事项里，我之后再处理"},
+        ]
+    elif status == "complete":
+        output = next((item for item in task["files"] if item.get("role") == "output"), None)
+        reply = task["summary"] or f"“{task['title']}”已经整理完成。"
+        options = []
+        if output:
+            generated_spreadsheet = {
+                "file_path": output["stored_path"], "dir": str(Path(output["stored_path"]).parent),
+                "file_name": output["original_name"], "rows": int(
+                    ((task.get("analysis") or {}).get("organization") or {}).get("rows") or 0
+                ),
+                "missing": ((task.get("analysis") or {}).get("organization") or {}).get("missing") or {},
+            }
+    elif status == "error":
+        reply = f"这件表格事项处理失败了：{task['error']}\n原表没有被修改，你可以重新托管或换成 xlsx/csv 再试。"
+        options = []
+    elif status == "archived":
+        reply = f"“{task['title']}”已经归档。\n\n{task['summary'] or '当时没有生成梳理摘要。'}"
+        options = []
+    else:
+        reply = f"“{task['title']}”还在本机后台梳理，原表没有被修改。你可以先忙别的，完成后会显示为“待你查看”。"
+        options = [{"label": "查看托管事项", "message": "打开表格托管事项看看当前进度"}]
+    return {
+        "reply": reply, "materials": [], "need_follow_up": status not in {"ready", "error", "archived"},
+        "missing_materials": [], "watermark_text": "", "contract_job": None, "document_job": None,
+        "model": "local-task-inbox", "training_notes_used": [], "templates_available": 0,
+        "quick_options": options, "rateable": True, "response_kind": "managed_task",
+        "generated_spreadsheet": generated_spreadsheet,
+    }
+
+
 def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
     """把精简库存和对话发给服务器 AI 资料员；原文件始终留在本机。"""
     require_unlocked()
     message = str(args.get("message") or "").strip()
     if not message:
         raise RuntimeError("请输入要办理的事项。")
+    local_task_reply = _assistant_local_task_reply(message, list(args.get("history") or []))
+    if local_task_reply:
+        return local_task_reply
     token = str(STATE.get("token") or "")
     if not token:
         raise RuntimeError("软件尚未在线登记，无法使用 AI 档案秘书。请先检查网络并重新登记。")
@@ -2345,6 +2512,7 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         _knowledge_log(f"search error={type(exc).__name__}:{str(exc)[:240]}")
         knowledge_hits = []
+    managed_tasks = assistanttasks.recent_context(conn)
     conn.close()
 
     query_words = [w for w in re.split(r"[\s,，。、;；/()（）]+", message) if w]
@@ -2418,6 +2586,7 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
                 "watermark_text": str(args.get("watermark_text") or "")[:100],
                 "training_notes": training_notes,
                 "template_pool": template_pool,
+                "managed_tasks": managed_tasks,
             },
             token=token,
             timeout=180,
@@ -2800,6 +2969,27 @@ def _clean_saved_message(item: Any) -> dict[str, Any] | None:
             "file_name": str(generated.get("file_name") or "")[:255],
             "template_name": str(generated.get("template_name") or "")[:100],
             "info": generated.get("info") if isinstance(generated.get("info"), dict) else {},
+        }
+    generated_sheet = item.get("generatedSpreadsheet") if isinstance(item.get("generatedSpreadsheet"), dict) else item.get("generated_spreadsheet")
+    if isinstance(generated_sheet, dict) and generated_sheet.get("file_path"):
+        message["generated_spreadsheet"] = {
+            "file_path": str(generated_sheet.get("file_path") or "")[:1000],
+            "dir": str(generated_sheet.get("dir") or "")[:1000],
+            "file_name": str(generated_sheet.get("file_name") or "")[:255],
+            "rows": max(0, int(generated_sheet.get("rows") or 0)),
+            "missing": generated_sheet.get("missing") if isinstance(generated_sheet.get("missing"), dict) else {},
+        }
+    managed_task = item.get("managedTask") if isinstance(item.get("managedTask"), dict) else item.get("managed_task")
+    if isinstance(managed_task, dict) and managed_task.get("id"):
+        message["managed_task"] = {
+            "id": str(managed_task.get("id") or "")[:40],
+            "title": str(managed_task.get("title") or "表格托管事项")[:100],
+            "status": str(managed_task.get("status") or "received")[:30],
+            "files": [
+                {"original_name": str(file.get("original_name") or "")[:255]}
+                for file in list(managed_task.get("files") or [])[:20]
+                if isinstance(file, dict)
+            ],
         }
     contract_context = _contract_context_payload(item.get("contractContext") or item.get("contract_context"))
     if contract_context:
@@ -3345,6 +3535,11 @@ COMMANDS = {
     "import_files": command_import_files,
     "find_materials": command_find_materials,
     "assistant_chat": command_assistant_chat,
+    "assistant_task_create": command_assistant_task_create,
+    "assistant_tasks_list": command_assistant_tasks_list,
+    "assistant_task_get": command_assistant_task_get,
+    "assistant_task_archive": command_assistant_task_archive,
+    "assistant_task_organize": command_assistant_task_organize,
     "generate_contract": command_generate_contract,
     "generate_document": command_generate_document,
     "assistant_notes_list": command_assistant_notes_list,

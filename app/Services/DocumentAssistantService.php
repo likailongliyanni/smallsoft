@@ -71,6 +71,17 @@ class DocumentAssistantService
                 'kind' => (string) ($item['kind'] ?? 'content'),
                 'text' => mb_substr((string) $item['text'], 0, 1800),
             ])->take(12)->values()->all();
+        $managedTasks = collect((array) ($options['managed_tasks'] ?? []))
+            ->filter(fn ($item) => is_array($item) && filled($item['id'] ?? null))
+            ->map(fn ($item) => [
+                'id' => mb_substr((string) ($item['id'] ?? ''), 0, 40),
+                'title' => mb_substr((string) ($item['title'] ?? ''), 0, 100),
+                'instruction' => mb_substr((string) ($item['instruction'] ?? ''), 0, 500),
+                'status' => mb_substr((string) ($item['status'] ?? ''), 0, 30),
+                'summary' => mb_substr((string) ($item['summary'] ?? ''), 0, 3000),
+                'files' => array_slice((array) ($item['files'] ?? []), 0, 20),
+                'updated_at' => mb_substr((string) ($item['updated_at'] ?? ''), 0, 40),
+            ])->take(12)->values()->all();
         $system .= <<<'PROMPT'
 
 
@@ -79,6 +90,8 @@ class DocumentAssistantService
 2. 按用户事项整理库存文件。
 3. 根据用户要求起草合同、协议及常用档案文书。先检索“本地文书模板资源池”，存在匹配模板时优先沿用模板；没有完全匹配模板时，才参考相近模板和用户要求综合起草。缺少关键事实时先追问，不得编造。
 4. 起草文书不代表必须导出库存文件；除非用户同时选择“需要整理文件”，否则 gather_ids 仍必须为空。
+5. 回答用户托管表格的进度和结果。只能依据“本地表格托管事项”中的状态和摘要回答；processing 表示仍在梳理，ready 表示可以向用户汇报，不得编造表内数据。
+6. ready 只表示完成只读分析，绝不能声称已经清空行、统一格式、合并 Sheet 或生成 Excel。只有托管事项 status=complete 且摘要明确写明生成结果时，才允许说已整理或已导出。用户追问托管表时，不得转去正式档案库存中臆测或回答“未上传”。
 
 对话节奏规则：
 - 不要一次把含糊需求想成完整任务。信息不足时先问一个最关键的问题，允许与用户进行多轮确认。
@@ -166,7 +179,11 @@ PROMPT;
                 "本地文书模板资源池（生成文书优先使用；template_id 只可使用这里的 id）：\n".
                 ($templatePool !== []
                     ? json_encode($templatePool, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-                    : '当前资源池为空，可按用户要求综合起草，但不得声称使用了现有模板。'),
+                    : '当前资源池为空，可按用户要求综合起草，但不得声称使用了现有模板。')."\n\n".
+                "本地表格托管事项（用于回答进度、结果和后续追问，不属于正式档案库存）：\n".
+                ($managedTasks !== []
+                    ? json_encode($managedTasks, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    : '当前没有表格托管事项。'),
         ];
 
         $raw = $this->ai->chat($config, $messages);

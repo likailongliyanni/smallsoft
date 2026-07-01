@@ -193,7 +193,7 @@ ipcMain.handle('pickFiles', async (_event, options = {}) => {
   const result = await dialog.showOpenDialog({
     title: options.title || '选择要上传的文件',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm', 'txt', 'csv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'] }],
+    filters: [{ name: '资料文件', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'docx', 'xlsx', 'xlsm', 'txt', 'csv', 'tsv', 'md', 'markdown', 'json', 'xml', 'rtf', 'log'] }],
   })
   return result.canceled ? [] : result.filePaths
 })

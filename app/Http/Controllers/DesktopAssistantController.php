@@ -65,6 +65,15 @@ class DesktopAssistantController extends Controller
             'knowledge_hits.*.kind' => ['nullable', 'string', 'in:metadata,content'],
             'knowledge_hits.*.text' => ['required', 'string', 'max:1800'],
             'knowledge_hits.*.score' => ['nullable', 'numeric'],
+            'managed_tasks' => ['nullable', 'array', 'max:12'],
+            'managed_tasks.*.id' => ['required', 'string', 'max:40'],
+            'managed_tasks.*.title' => ['required', 'string', 'max:100'],
+            'managed_tasks.*.instruction' => ['nullable', 'string', 'max:500'],
+            'managed_tasks.*.status' => ['required', 'string', 'in:received,processing,ready,complete,archived,error'],
+            'managed_tasks.*.summary' => ['nullable', 'string', 'max:3000'],
+            'managed_tasks.*.files' => ['nullable', 'array', 'max:20'],
+            'managed_tasks.*.files.*' => ['string', 'max:255'],
+            'managed_tasks.*.updated_at' => ['nullable', 'string', 'max:40'],
             'inventory' => ['required', 'array', 'max:400'],
             'inventory.*.id' => ['required', 'integer', 'min:1'],
             'inventory.*.file_name' => ['nullable', 'string', 'max:255'],
@@ -90,6 +99,7 @@ class DesktopAssistantController extends Controller
                     'template_pool' => array_values($data['template_pool'] ?? []),
                     'contract_context' => (array) ($data['contract_context'] ?? []),
                     'knowledge_hits' => array_values($data['knowledge_hits'] ?? []),
+                    'managed_tasks' => array_values($data['managed_tasks'] ?? []),
                 ],
             ));
         } catch (Throwable $e) {

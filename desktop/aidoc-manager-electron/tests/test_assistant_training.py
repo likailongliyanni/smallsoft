@@ -68,6 +68,22 @@ class AssistantTrainingDataTests(unittest.TestCase):
         self.assertEqual("答案准确，可以直接使用。", cleaned["rating_feedback"])
         self.assertTrue(cleaned["rateable"])
 
+    def test_managed_task_card_is_saved_with_chat(self) -> None:
+        cleaned = backend._clean_saved_message({
+            "role": "ai",
+            "text": "已经接下这件事了",
+            "managedTask": {
+                "id": "task-1",
+                "title": "六月对账表",
+                "status": "processing",
+                "files": [{"original_name": "六月.xlsx", "stored_path": "private"}],
+            },
+        })
+
+        self.assertEqual("task-1", cleaned["managed_task"]["id"])
+        self.assertEqual("六月.xlsx", cleaned["managed_task"]["files"][0]["original_name"])
+        self.assertNotIn("stored_path", cleaned["managed_task"]["files"][0])
+
     def test_export_contains_only_rated_question_answer_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
