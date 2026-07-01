@@ -114,6 +114,7 @@ function callBackend(cmd, args = {}) {
       : cmd === 'quick_scan' ? 30 * 60 * 1000
       : cmd === 'analyze_documents' ? 24 * 60 * 60 * 1000
       : cmd === 'analyze_document' ? 5 * 60 * 1000
+      : cmd === 'assistant_chat' ? 4 * 60 * 1000
       : 90 * 1000
     const timer = setTimeout(() => {
       if (pending.has(id)) {
@@ -174,6 +175,7 @@ ipcMain.handle('backend', async (_event, cmd, args) => {
     const data = await callBackend(cmd, args || {})
     return { ok: true, data }
   } catch (error) {
+    writeLog(`[backend command error] cmd=${cmd} error=${error?.stack || error?.message || String(error)}`)
     return { ok: false, error: error.message || String(error) }
   }
 })

@@ -15,6 +15,7 @@ import hmac
 import io
 import json
 import os
+import queue
 import re
 import shutil
 import sqlite3
@@ -36,6 +37,7 @@ from typing import Any
 import docintel
 import contractgen
 import documentgen
+import knowledge
 import templatepool
 
 APP_CODE = "AIDOC"
@@ -79,6 +81,10 @@ EMIT_LOCK = threading.Lock()
 RECOGNIZE_CONTEXT = threading.local()
 RECOGNITION_JOBS: dict[str, dict[str, Any]] = {}
 RECOGNITION_JOBS_LOCK = threading.Lock()
+KNOWLEDGE_QUEUE: queue.Queue[tuple[int, bool]] = queue.Queue()
+KNOWLEDGE_QUEUE_LOCK = threading.Lock()
+KNOWLEDGE_QUEUED: set[tuple[int, bool]] = set()
+KNOWLEDGE_WORKER: threading.Thread | None = None
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -321,6 +327,8 @@ def command_set_password(args: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("本地密码至少 4 位。")
     save_config({"password": pbkdf2_hash(password)})
     STATE["unlocked"] = True
+    if str(load_config().get("library_dir") or "").strip():
+        schedule_knowledge_index(0)
     return {"has_password": True, "unlocked": True}
 
 
@@ -329,6 +337,8 @@ def command_verify_password(args: dict[str, Any]) -> dict[str, Any]:
     ok = verify_password(password, load_config().get("password"))
     if ok:
         STATE["unlocked"] = True
+        if str(load_config().get("library_dir") or "").strip():
+            schedule_knowledge_index(0)
     return {"unlocked": ok}
 
 
@@ -398,7 +408,79 @@ def connect_db(root: Path | None = None) -> sqlite3.Connection:
     ensure_recognition_columns(conn)
     ensure_quick_scan_table(conn)
     templatepool.ensure_table(conn)
+    knowledge.ensure_tables(conn)
     return conn
+
+
+def _knowledge_log(message: str) -> None:
+    """内部诊断日志，不在用户界面展示索引实现。"""
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        path = APP_DIR / "knowledge-index.log"
+        if path.exists() and path.stat().st_size > 1024 * 1024:
+            path.replace(path.with_suffix(".log.1"))
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+    except Exception:
+        pass
+
+
+def _knowledge_worker_loop() -> None:
+    while True:
+        document_id, force = KNOWLEDGE_QUEUE.get()
+        try:
+            root = library_dir()
+            if document_id == 0:
+                conn = connect_db(root)
+                try:
+                    knowledge.cleanup_removed_documents(conn)
+                    pending_ids = knowledge.pending_document_ids(conn)
+                finally:
+                    conn.close()
+                _knowledge_log(f"backfill start pending={len(pending_ids)}")
+                for pending_id in pending_ids:
+                    try:
+                        knowledge.index_document(db_path(root), pending_id)
+                    except Exception as exc:
+                        _knowledge_log(f"document={pending_id} error={type(exc).__name__}:{str(exc)[:240]}")
+                    time.sleep(0.02)
+                _knowledge_log(f"backfill done indexed={len(pending_ids)}")
+            else:
+                knowledge.index_document(db_path(root), document_id, force=force)
+        except Exception as exc:
+            _knowledge_log(f"task={document_id} error={type(exc).__name__}:{str(exc)[:240]}")
+        finally:
+            with KNOWLEDGE_QUEUE_LOCK:
+                KNOWLEDGE_QUEUED.discard((document_id, force))
+            KNOWLEDGE_QUEUE.task_done()
+
+
+def schedule_knowledge_index(document_id: int = 0, *, force: bool = False) -> None:
+    global KNOWLEDGE_WORKER
+    task = (max(0, int(document_id)), bool(force))
+    with KNOWLEDGE_QUEUE_LOCK:
+        if task not in KNOWLEDGE_QUEUED:
+            KNOWLEDGE_QUEUED.add(task)
+            KNOWLEDGE_QUEUE.put(task)
+        if KNOWLEDGE_WORKER is None or not KNOWLEDGE_WORKER.is_alive():
+            KNOWLEDGE_WORKER = threading.Thread(
+                target=_knowledge_worker_loop,
+                name="aidoc-knowledge-index",
+                daemon=True,
+            )
+            KNOWLEDGE_WORKER.start()
+
+
+def command_start_knowledge_index(_: dict[str, Any]) -> dict[str, Any]:
+    require_unlocked()
+    root = library_dir()
+    conn = connect_db(root)
+    try:
+        pending = len(knowledge.pending_document_ids(conn))
+    finally:
+        conn.close()
+    schedule_knowledge_index(0)
+    return {"started": True, "pending": pending}
 
 
 def ensure_quick_scan_table(conn: sqlite3.Connection) -> None:
@@ -440,6 +522,7 @@ def command_set_library_dir(args: dict[str, Any]) -> dict[str, Any]:
     (target / "files").mkdir(exist_ok=True)
     connect_db(target).close()
     save_config({"library_dir": str(target)})
+    schedule_knowledge_index(0)
     return {"library_dir": str(target), "db": str(db_path(target))}
 
 
@@ -1565,6 +1648,7 @@ def command_analyze_document(args: dict[str, Any]) -> dict[str, Any]:
         template_created = None
     conn.commit()
     conn.close()
+    schedule_knowledge_index(doc_id)
     _emit("done", "识别完成")
 
     return {
@@ -1968,6 +2052,7 @@ def command_confirm_document(args: dict[str, Any]) -> dict[str, Any]:
             pass
     conn.commit()
     conn.close()
+    schedule_knowledge_index(doc_id, force=True)
     return {"id": doc_id, "review_status": review_status, "duplicate_of_id": duplicate_of, "moved_to": moved_to}
 
 
@@ -2103,6 +2188,106 @@ def command_find_materials(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _contract_context_payload(value: Any) -> dict[str, Any]:
+    """只保留续写合同所需字段，避免把整个聊天消息重新发送。"""
+    if not isinstance(value, dict):
+        return {}
+    items = []
+    for raw in list(value.get("line_items") or [])[:30]:
+        if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
+            continue
+        items.append({
+            "name": str(raw.get("name") or "").strip()[:200],
+            "specification": str(raw.get("specification") or "").strip()[:200],
+            "quantity": raw.get("quantity") or 0,
+            "unit": str(raw.get("unit") or "").strip()[:20],
+            "unit_price": raw.get("unit_price") or 0,
+            "remark": str(raw.get("remark") or "").strip()[:200],
+        })
+    context = {
+        "template_id": int(value.get("template_id") or 0),
+        "source_document_id": int(value.get("source_document_id") or 0),
+        "supplier_name": str(value.get("supplier_name") or "").strip()[:200],
+        "payee_name": str(value.get("payee_name") or "").strip()[:200],
+        "bank_name": str(value.get("bank_name") or "").strip()[:200],
+        "bank_account": re.sub(r"\s+", "", str(value.get("bank_account") or "").strip())[:100],
+        "supporting_ids": [int(item) for item in list(value.get("supporting_ids") or [])[:20] if str(item).isdigit()],
+        "line_items": items,
+        "delivery_address": str(value.get("delivery_address") or "").strip()[:300],
+        "delivery_deadline": str(value.get("delivery_deadline") or "").strip()[:300],
+        "payment_terms": str(value.get("payment_terms") or "").strip()[:500],
+        "output_name": str(value.get("output_name") or "新合同").strip()[:100],
+    }
+    if context["template_id"] <= 0 or not context["supplier_name"] or not items:
+        return {}
+    return context
+
+
+def _assistant_needs_template_context(message: str) -> bool:
+    text = str(message or "")
+    action = re.search(r"生成|起草|拟定|拟一|写一|制作|导出|新建|修改|替换|套用", text)
+    document = re.search(r"合同|协议|授权书|证明|声明|申请书|文书", text)
+    return bool(action and document)
+
+
+def _assistant_local_clarification(message: str) -> dict[str, Any] | None:
+    """极短且含糊的需求先澄清，不把整个资料库压给远端模型硬猜。"""
+    text = re.sub(r"\s+", "", str(message or "")).strip("。！？!?，,")
+    if text in {"你好", "您好", "在吗", "小秘书", "嗨"}:
+        return {
+            "reply": "我在。你这次想查资料、问资料内容，还是生成文书？",
+            "quick_options": [
+                {"label": "查找资料", "message": "我想查找一份资料"},
+                {"label": "询问内容", "message": "我想询问资料里的具体内容"},
+                {"label": "生成文书", "message": "我想生成一份文书"},
+            ],
+        }
+    if re.fullmatch(r"(?:帮我|麻烦)?(?:做|写|弄|处理|看)?(?:一下|一份|一个)?合同", text):
+        return {
+            "reply": "可以。你是要查找已有合同、起草新合同，还是修改库存中的合同？",
+            "quick_options": [
+                {"label": "查找已有合同", "message": "请帮我查找现有合同"},
+                {"label": "起草新合同", "message": "我要起草一份新合同，请告诉我需要提供哪些信息"},
+                {"label": "修改库存合同", "message": "我要基于库存中的合同修改并生成新合同"},
+                {"label": "检查合同内容", "message": "我要询问或检查一份合同的具体内容"},
+            ],
+        }
+    if re.fullmatch(r"(?:帮我|麻烦)?(?:找|查|整理|处理|看)?(?:一下|一些)?(?:资料|文件|材料|文档)", text):
+        return {
+            "reply": "可以。你希望按什么方式处理这些资料？",
+            "quick_options": [
+                {"label": "按名称查找", "message": "我要按文件名或关键词查找资料"},
+                {"label": "按公司查找", "message": "我要查找某家公司的全部资料"},
+                {"label": "检查缺失材料", "message": "我要检查办理事项还缺哪些材料"},
+                {"label": "整理导出", "message": "我要把相关资料整理到一个文件夹"},
+            ],
+        }
+    return None
+
+
+def _assistant_fallback(message: str, error: str) -> dict[str, Any]:
+    return {
+        "reply": "本轮连接在回答完成前中断了。先不让对话卡死，你可以直接重试，或者先缩小处理范围。",
+        "materials": [],
+        "need_follow_up": True,
+        "missing_materials": [],
+        "watermark_text": "",
+        "contract_job": None,
+        "document_job": None,
+        "model": "",
+        "training_notes_used": [],
+        "templates_available": 0,
+        "quick_options": [
+            {"label": "重试刚才问题", "message": str(message or "")[:2000]},
+            {"label": "先查相关资料", "message": "先帮我查找与刚才问题相关的资料，不要生成文件"},
+            {"label": "我来补充条件", "message": "请先列出需要我补充的关键信息，不要直接生成文件"},
+        ],
+        "rateable": False,
+        "response_kind": "connection_fallback",
+        "connection_error": str(error or "")[:300],
+    }
+
+
 def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
     """把精简库存和对话发给服务器 AI 资料员；原文件始终留在本机。"""
     require_unlocked()
@@ -2112,6 +2297,16 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
     token = str(STATE.get("token") or "")
     if not token:
         raise RuntimeError("软件尚未在线登记，无法使用 AI 档案秘书。请先检查网络并重新登记。")
+
+    clarification = _assistant_local_clarification(message)
+    if clarification:
+        return {
+            **clarification,
+            "materials": [], "need_follow_up": True, "missing_materials": [],
+            "watermark_text": "", "contract_job": None, "document_job": None,
+            "model": "local-dialog-router", "training_notes_used": [],
+            "templates_available": 0, "rateable": True, "response_kind": "clarification",
+        }
 
     conn = connect_db(library_dir())
     rows = list(conn.execute(
@@ -2124,16 +2319,17 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         """
     ).fetchall())
     training_notes = _matching_training_notes(conn, message)
+    use_template_context = _assistant_needs_template_context(message)
     template_rows = conn.execute(
         "SELECT * FROM document_templates WHERE enabled = 1 ORDER BY updated_at DESC LIMIT 300"
-    ).fetchall()
+    ).fetchall() if use_template_context else []
     template_rows = sorted(
         template_rows,
         key=lambda row: (templatepool.rank_for_message(row, message), int(row["id"])),
         reverse=True,
-    )[:16]
+    )[:6]
     template_pool = []
-    content_budget = 80000
+    content_budget = 36000
     for row in template_rows:
         item = templatepool.payload(row)
         body = str(item.get("template_text") or item.get("content_text") or "")
@@ -2144,10 +2340,16 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         template_pool.append(item)
         if content_budget <= 0:
             break
+    try:
+        knowledge_hits = knowledge.search(conn, message, limit=12)
+    except Exception as exc:
+        _knowledge_log(f"search error={type(exc).__name__}:{str(exc)[:240]}")
+        knowledge_hits = []
     conn.close()
 
     query_words = [w for w in re.split(r"[\s,，。、;；/()（）]+", message) if w]
     needed_types: set[str] = set()
+    knowledge_ids = {int(item.get("document_id") or 0) for item in knowledge_hits}
     for keyword, material_types in TASK_MATERIALS.items():
         if keyword in message:
             needed_types.update(material_types)
@@ -2157,6 +2359,8 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
             "file_name", "document_type_label", "company_name", "brand", "applicable_scope"
         ))
         score = 3 if str(row["document_type"] or "") in needed_types else 0
+        if int(row["id"]) in knowledge_ids:
+            score += 20
         score += sum(2 for word in query_words if word and word in haystack)
         if str(row["review_status"] or "") == "confirmed":
             score += 1
@@ -2164,7 +2368,7 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
 
     # 控制上下文体积：相关资料优先，其次是最近确认过的资料，最多发 300 条元数据。
     rows.sort(key=inventory_rank, reverse=True)
-    rows = rows[:300]
+    rows = rows[:180]
 
     inventory: list[dict[str, Any]] = []
     local: dict[int, dict[str, Any]] = {}
@@ -2185,6 +2389,7 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         local[item["id"]] = item
 
     history: list[dict[str, str]] = []
+    contract_context: dict[str, Any] = {}
     for entry in list(args.get("history") or [])[-12:]:
         if not isinstance(entry, dict):
             continue
@@ -2192,6 +2397,12 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         content = str(entry.get("content") or "").strip()
         if content:
             history.append({"role": role, "content": content[:3000]})
+        if role == "assistant":
+            candidate = _contract_context_payload(
+                entry.get("contract_context") or entry.get("contractContext")
+            )
+            if candidate:
+                contract_context = candidate
 
     try:
         response = request_json(
@@ -2199,6 +2410,8 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
             {
                 "message": message[:2000],
                 "history": history,
+                "contract_context": contract_context or None,
+                "knowledge_hits": knowledge_hits,
                 "inventory": inventory,
                 "need_organize": bool(args.get("need_organize")),
                 "use_watermark": bool(args.get("use_watermark")),
@@ -2215,9 +2428,11 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
             error = str(detail.get("message") or detail)
         except Exception:
             error = str(exc)
+        if int(exc.code) >= 500:
+            return _assistant_fallback(message, f"HTTP {exc.code}: {error[:240]}")
         raise RuntimeError(f"AI 档案秘书请求失败（HTTP {exc.code}）：{error[:300]}") from exc
     except Exception as exc:
-        raise RuntimeError(f"连接 AI 档案秘书失败：{str(exc)[:300]}") from exc
+        return _assistant_fallback(message, f"{type(exc).__name__}: {str(exc)[:240]}")
 
     ids = []
     for value in response.get("gather_ids") or []:
@@ -2240,6 +2455,13 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         })
 
     contract_job = response.get("contract_job") if isinstance(response.get("contract_job"), dict) else None
+    if contract_job:
+        template_id = int(contract_job.get("template_id") or 0)
+        matching_template = next(
+            (item for item in template_pool if int(item.get("id") or 0) == template_id), None
+        )
+        if matching_template:
+            contract_job["source_document_id"] = int(matching_template.get("source_document_id") or 0)
     document_job = response.get("document_job") if isinstance(response.get("document_job"), dict) else None
     reply = str(response.get("reply") or "我已经核对了当前库存。")
     if contract_job or document_job:
@@ -2260,6 +2482,10 @@ def command_assistant_chat(args: dict[str, Any]) -> dict[str, Any]:
         "model": str(response.get("model") or ""),
         "training_notes_used": [note["title"] for note in training_notes],
         "templates_available": len(template_pool),
+        "quick_options": list(response.get("quick_options") or [])[:4]
+            if isinstance(response.get("quick_options"), list) else [],
+        "rateable": True,
+        "response_kind": "answer",
     }
 
 
@@ -2269,6 +2495,9 @@ def command_generate_contract(args: dict[str, Any]) -> dict[str, Any]:
     job = args.get("job") if isinstance(args.get("job"), dict) else {}
     template_id = int(job.get("template_id") or 0)
     supplier_name = str(job.get("supplier_name") or "").strip()[:200]
+    payee_name = str(job.get("payee_name") or "").strip()[:200]
+    bank_name = str(job.get("bank_name") or "").strip()[:200]
+    bank_account = re.sub(r"\s+", "", str(job.get("bank_account") or "").strip())[:100]
     line_items = job.get("line_items") if isinstance(job.get("line_items"), list) else []
     delivery_address = str(job.get("delivery_address") or "").strip()[:300]
     delivery_deadline = str(job.get("delivery_deadline") or "").strip()[:300]
@@ -2331,6 +2560,9 @@ def command_generate_contract(args: dict[str, Any]) -> dict[str, Any]:
         template_text=template_text,
         output_path=output_path,
         supplier_name=supplier_name,
+        payee_name=payee_name,
+        bank_name=bank_name,
+        bank_account=bank_account,
         support_texts=support_texts,
         line_items=line_items,
         delivery_address=delivery_address,
@@ -2567,12 +2799,43 @@ def _clean_saved_message(item: Any) -> dict[str, Any] | None:
             "dir": str(generated.get("dir") or "")[:1000],
             "file_name": str(generated.get("file_name") or "")[:255],
             "template_name": str(generated.get("template_name") or "")[:100],
+            "info": generated.get("info") if isinstance(generated.get("info"), dict) else {},
         }
+    contract_context = _contract_context_payload(item.get("contractContext") or item.get("contract_context"))
+    if contract_context:
+        message["contract_context"] = contract_context
     for key in ("organize", "useWatermark"):
         if key in item:
             message[key] = bool(item.get(key))
     if item.get("watermarkText"):
         message["watermarkText"] = str(item.get("watermarkText"))[:60]
+    if role == "ai":
+        message["rateable"] = bool(item.get("rateable", True))
+        quick_options = []
+        for option in list(item.get("quickOptions") or item.get("quick_options") or [])[:4]:
+            if isinstance(option, dict):
+                label = str(option.get("label") or option.get("message") or "").strip()[:80]
+                option_message = str(option.get("message") or option.get("label") or "").strip()[:2000]
+                if label and option_message:
+                    quick_options.append({"label": label, "message": option_message})
+            else:
+                value = str(option or "").strip()[:200]
+                if value:
+                    quick_options.append(value)
+        if quick_options:
+            message["quick_options"] = quick_options
+        try:
+            rating = int(item.get("rating") or 0)
+        except (TypeError, ValueError):
+            rating = 0
+        if 1 <= rating <= 5:
+            message["rating"] = rating
+            message["rating_feedback"] = str(
+                item.get("ratingFeedback") or item.get("rating_feedback") or ""
+            ).strip()[:2000]
+            message["rated_at"] = str(
+                item.get("ratedAt") or item.get("rated_at") or datetime.now().isoformat(timespec="seconds")
+            )[:40]
     return message
 
 
@@ -2668,6 +2931,75 @@ def command_assistant_conversation_delete(args: dict[str, Any]) -> dict[str, Any
     if path.exists():
         path.unlink()
     return {"deleted": True, "id": path.stem}
+
+
+def command_assistant_training_export(_: dict[str, Any]) -> dict[str, Any]:
+    """把已评分问答导出为本地 JSONL；资料只记录引用，不上传原文件。"""
+    require_unlocked()
+    records: list[dict[str, Any]] = []
+    for path in sorted(_assistant_chat_dir().glob("*.json")):
+        conversation = _read_assistant_conversation(path)
+        if not conversation:
+            continue
+        messages = conversation.get("messages") if isinstance(conversation.get("messages"), list) else []
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict) or message.get("role") != "ai":
+                continue
+            try:
+                rating = int(message.get("rating") or 0)
+            except (TypeError, ValueError):
+                rating = 0
+            if not 1 <= rating <= 5:
+                continue
+            previous_user = next(
+                (
+                    str(candidate.get("text") or "")
+                    for candidate in reversed(messages[:index])
+                    if isinstance(candidate, dict) and candidate.get("role") == "user"
+                ),
+                "",
+            )
+            if not previous_user:
+                continue
+            context = [
+                {"role": str(candidate.get("role") or ""), "text": str(candidate.get("text") or "")}
+                for candidate in messages[max(0, index - 6):index]
+                if isinstance(candidate, dict) and str(candidate.get("text") or "").strip()
+            ]
+            materials = message.get("materials") if isinstance(message.get("materials"), list) else []
+            contract_context = message.get("contract_context") if isinstance(message.get("contract_context"), dict) else {}
+            document_refs = sorted({
+                int(material.get("id") or 0)
+                for material in materials
+                if isinstance(material, dict) and int(material.get("id") or 0) > 0
+            } | ({int(contract_context.get("source_document_id") or 0)} if int(contract_context.get("source_document_id") or 0) > 0 else set()))
+            records.append({
+                "schema_version": 1,
+                "conversation_id": str(conversation.get("id") or path.stem),
+                "conversation_title": str(conversation.get("title") or ""),
+                "question": previous_user,
+                "answer": str(message.get("text") or ""),
+                "rating": rating,
+                "feedback": str(message.get("rating_feedback") or ""),
+                "rated_at": str(message.get("rated_at") or ""),
+                "context": context,
+                "document_refs": document_refs,
+                "materials": materials,
+                "generated_document": message.get("generated_document") if isinstance(message.get("generated_document"), dict) else None,
+            })
+    if not records:
+        raise RuntimeError("还没有已评分的 AI 回复，请先给回答打分。")
+    export_dir = library_dir() / "AI秘书训练数据"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    output_path = export_dir / ("AI秘书训练数据_" + time.strftime("%Y%m%d-%H%M%S") + ".jsonl")
+    payload = "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n"
+    output_path.write_text(payload, "utf-8")
+    return {
+        "file_path": str(output_path),
+        "dir": str(export_dir),
+        "file_name": output_path.name,
+        "count": len(records),
+    }
 
 
 def command_templates_list(_: dict[str, Any]) -> dict[str, Any]:
@@ -3002,6 +3334,7 @@ COMMANDS = {
     "set_password": command_set_password,
     "verify_password": command_verify_password,
     "set_library_dir": command_set_library_dir,
+    "start_knowledge_index": command_start_knowledge_index,
     "scan_roots": command_scan_roots,
     "scan_folder": command_scan_folder,
     "quick_scan": command_quick_scan,
@@ -3022,6 +3355,7 @@ COMMANDS = {
     "assistant_conversation_save": command_assistant_conversation_save,
     "assistant_conversation_rename": command_assistant_conversation_rename,
     "assistant_conversation_delete": command_assistant_conversation_delete,
+    "assistant_training_export": command_assistant_training_export,
     "templates_list": command_templates_list,
     "templates_rebuild": command_templates_rebuild,
     "template_save": command_template_save,

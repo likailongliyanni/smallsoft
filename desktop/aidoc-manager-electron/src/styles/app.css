@@ -876,6 +876,11 @@ button:disabled {
 .conversation-actions button { width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--muted); background: #fff; }
 .conversation-actions button:hover { color: var(--primary); }
 .conversation-actions button:last-child:hover { color: var(--red); }
+.conversation-rename { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 25px 25px; align-items: center; gap: 4px; padding: 5px; }
+.conversation-rename input { min-width: 0; height: 28px; padding: 4px 7px; border: 1px solid #88c5a6; border-radius: 6px; color: var(--text); background: #fff; font-size: 12px; outline: none; }
+.conversation-rename button { width: 25px; height: 25px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; color: var(--primary); background: #fff; cursor: pointer; }
+.conversation-rename button:last-child { color: var(--muted); }
+.conversation-rename button:disabled { opacity: .5; cursor: default; }
 .conversation-empty { padding: 24px 8px; color: var(--muted); font-size: 11px; text-align: center; }
 .conversation-error { margin: 0 0 8px; padding: 6px 7px; border-radius: 6px; color: #b42318; background: #fff1f0; font-size: 10px; line-height: 1.4; }
 .current-chat-title { display: flex; align-items: baseline; gap: 8px; padding: 0 2px 8px; border-bottom: 1px solid var(--border); }
@@ -911,6 +916,10 @@ button:disabled {
   .generated-document { min-width: 0; flex-wrap: wrap; }
 }
 .training-hit { margin-top: 7px; padding: 5px 8px; border-radius: 6px; color: #166a46; background: #e5f5ec; font-size: 10px; }
+.assistant-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.assistant-options button { padding: 6px 10px; border: 1px solid #9bcdb3; border-radius: 999px; color: #136c48; background: #fff; font-size: 11px; cursor: pointer; }
+.assistant-options button:hover { border-color: var(--primary); background: var(--primary-soft); }
+.assistant-options button:disabled { opacity: .5; cursor: default; }
 .chat-materials { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .chat-mat { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; font-size: 13px;
   padding: 5px 7px; border-radius: 8px; background: rgba(0,0,0,.03); }
@@ -925,6 +934,16 @@ button:disabled {
 .message-export-options .primary-btn.small { margin: 0; white-space: nowrap; }
 .gather-btn { opacity: 1 !important; cursor: pointer !important; pointer-events: auto !important; }
 .message-export-error { margin: 6px 0 0; padding: 6px 8px; border-radius: 6px; color: #b42318; background: #fff1f0; font-size: 11px; }
+.answer-rating { margin-top: 9px; padding-top: 7px; border-top: 1px solid rgba(0,0,0,.08); }
+.answer-rating-row { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; }
+.answer-rating-row button { padding: 0 1px; border: 0; color: #bdc7c0; background: transparent; font-size: 17px; line-height: 1; cursor: pointer; transition: color .15s, transform .15s; }
+.answer-rating-row button:hover { color: #e0a72f; transform: translateY(-1px); }
+.answer-rating-row button.active { color: #f2b632; }
+.answer-rating-row em { margin-left: 5px; color: var(--primary); font-style: normal; font-weight: 600; }
+.answer-feedback { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: end; gap: 6px; margin-top: 7px; }
+.answer-feedback textarea { min-width: 0; resize: vertical; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: #fff; font: inherit; font-size: 11px; line-height: 1.45; }
+.answer-feedback .ghost-btn.small { align-self: end; white-space: nowrap; }
+.answer-feedback small { grid-column: 1 / -1; color: #16724b; font-size: 10px; }
 
 .chat-export-settings { display: flex; align-items: stretch; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); }
 .export-toggle { min-width: 180px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: #fff; cursor: pointer; }

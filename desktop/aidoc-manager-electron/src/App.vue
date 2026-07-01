@@ -471,6 +471,7 @@
               <aside class="conversation-sidebar">
                 <div class="conversation-sidebar-head">
                   <button class="primary-btn small" @click="newConversation"><Plus :size="14" /> 新对话</button>
+                  <button class="icon-btn" title="导出已评分训练数据" @click="exportTrainingDataset"><BookOpenCheck :size="16" /></button>
                   <button class="icon-btn" title="打开本地聊天记录文件夹" @click="openConversationFolder"><FolderOpen :size="16" /></button>
                 </div>
                 <div v-if="conversations.error" class="conversation-error">{{ conversations.error }}</div>
@@ -479,12 +480,19 @@
                 <div v-for="group in chatGroups" :key="group.key" class="conversation-group">
                   <div class="conversation-group-label">{{ group.label }}</div>
                   <div v-for="item in group.items" :key="item.id" class="conversation-item" :class="{ active: conversations.currentId === item.id }">
-                    <button class="conversation-open" @click="loadConversation(item.id)">
+                    <div v-if="conversations.renamingId === item.id" class="conversation-rename" @click.stop>
+                      <input v-model="conversations.renameValue" maxlength="100"
+                        @keydown.enter.prevent="saveRenameConversation(item)"
+                        @keydown.esc.prevent="cancelRenameConversation" />
+                      <button title="保存名称" :disabled="conversations.renaming" @click="saveRenameConversation(item)"><CheckCircle2 :size="13" /></button>
+                      <button title="取消" :disabled="conversations.renaming" @click="cancelRenameConversation"><X :size="13" /></button>
+                    </div>
+                    <button v-else class="conversation-open" @click="loadConversation(item.id)">
                       <strong>{{ item.title }}</strong>
                       <small>{{ formatConversationAge(item.updated_at) }}</small>
                     </button>
-                    <div class="conversation-actions">
-                      <button title="修改名称" @click.stop="renameConversation(item)"><Pencil :size="12" /></button>
+                    <div v-if="conversations.renamingId !== item.id" class="conversation-actions">
+                      <button title="修改名称" @click.stop="startRenameConversation(item)"><Pencil :size="12" /></button>
                       <button title="删除对话" @click.stop="deleteConversation(item)"><Trash2 :size="12" /></button>
                     </div>
                   </div>
@@ -502,12 +510,18 @@
                     <div class="chat-text">{{ m.text }}</div>
                     <div v-if="m.generatedDocument" class="generated-document">
                       <FileText :size="20" />
-                      <span><strong>{{ m.generatedDocument.file_name }}</strong><small>{{ m.generatedDocument.template_name ? `已使用资源池模板：${m.generatedDocument.template_name}` : '已根据本轮要求综合生成新文书' }}</small></span>
+                      <span><strong>{{ m.generatedDocument.file_name }}</strong><small>{{ m.generatedDocument.info?.supplier ? `新合同乙方：${m.generatedDocument.info.supplier}` : (m.generatedDocument.template_name ? `已使用资源池模板：${m.generatedDocument.template_name}` : '已根据本轮要求综合生成新文书') }}</small></span>
                       <button class="primary-btn small" @click="openGeneratedDocument(m)">打开文书</button>
                       <button class="ghost-btn small" @click="openPath(m.generatedDocument.dir)">打开文件夹</button>
                     </div>
                     <div v-if="m.trainingNotesUsed && m.trainingNotesUsed.length" class="training-hit">
                       已应用培训笔记：{{ m.trainingNotesUsed.join('、') }}
+                    </div>
+                    <div v-if="m.quickOptions && m.quickOptions.length" class="assistant-options">
+                      <button v-for="(option, optionIndex) in m.quickOptions" :key="optionIndex"
+                        type="button" :disabled="chat.busy" @click="chooseAssistantOption(option)">
+                        {{ assistantOptionLabel(option) }}
+                      </button>
                     </div>
                     <div v-if="m.organize && m.materials && m.materials.length" class="chat-materials">
                       <label v-for="x in m.materials" :key="x.id" class="chat-mat">
@@ -528,6 +542,24 @@
                         </button>
                       </div>
                       <p v-if="m.exportError" class="message-export-error">{{ m.exportError }}</p>
+                    </div>
+                    <div v-if="m.role === 'ai' && m.rateable" class="answer-rating">
+                      <div class="answer-rating-row">
+                        <span>这次回答：</span>
+                        <button v-for="score in 5" :key="score" type="button"
+                          :class="{ active: score <= Number(m.rating || 0) }"
+                          :title="`${score}分 · ${ratingLabel(score)}`"
+                          @click="rateAnswer(m, score)">★</button>
+                        <em v-if="m.rating">{{ m.rating }}分 · {{ ratingLabel(m.rating) }}</em>
+                      </div>
+                      <div v-if="m.rating" class="answer-feedback">
+                        <textarea v-model="m.ratingFeedback" maxlength="2000" rows="2"
+                          placeholder="可选：哪里答得好、哪里需要改，具体纠错最有训练价值"
+                          @input="m.ratingSaved = false"></textarea>
+                        <button class="ghost-btn small" type="button" :disabled="m.ratingSaving"
+                          @click="saveAnswerFeedback(m)">{{ m.ratingSaving ? '保存中…' : '保存反馈' }}</button>
+                        <small v-if="m.ratingSaved">已保存到本地训练记录</small>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1338,7 +1370,14 @@ async function loadDocs() {
     if (lib.filterType) args.document_type = lib.filterType
     args.page = lib.page
     args.per_page = lib.perPage
-    const data = await backend('list_documents', args)
+    let data
+    try {
+      data = await backend('list_documents', args)
+    } catch (firstError) {
+      // 后台索引刚好在提交 SQLite 时可能短暂占锁；自动重试一次，不能把读取失败显示成空资料库。
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      data = await backend('list_documents', args)
+    }
     const docs = (data.documents || []).map((x) => ({ ...x, busy: false }))
     lib.docs = docs
     lib.stats = data.stats || lib.stats
@@ -1839,6 +1878,7 @@ async function deleteTrainingNote() {
 const CHAT_GREETING = '你好，我是你的 AI 档案秘书👋 可以帮你查找档案、整理材料，也可以根据要求起草合同内容。默认只查询和回答；需要导出材料时，请先勾选下方“需要整理文件”，还可以选择给导出副本添加水印。'
 const conversations = reactive({
   items: [], loading: false, currentId: '', currentTitle: '', dir: '', error: '',
+  renamingId: '', renameValue: '', renaming: false,
 })
 
 function weekStart(value) {
@@ -1896,7 +1936,7 @@ function newConversation() {
   conversations.currentTitle = '新对话'
   chat.messages = []
   chat.input = ''
-  pushMsg('ai', CHAT_GREETING)
+  pushMsg('ai', CHAT_GREETING, [], { rateable: false })
 }
 
 function restoreSavedMessage(item) {
@@ -1909,6 +1949,14 @@ function restoreSavedMessage(item) {
     gathered: '', gathering: false, exportError: '', organize: Boolean(item.organize),
     useWatermark: Boolean(item.useWatermark), watermarkText: item.watermarkText || '',
     generatedDocument: item.generated_document || null,
+    contractContext: item.contract_context || null,
+    rateable: item.role !== 'user' && item.rateable !== false && item.text !== CHAT_GREETING,
+    rating: Number(item.rating || 0),
+    ratingFeedback: item.rating_feedback || '',
+    ratedAt: item.rated_at || '',
+    ratingSaving: false,
+    ratingSaved: Boolean(item.rating),
+    quickOptions: Array.isArray(item.quick_options) ? item.quick_options : [],
   }
 }
 
@@ -1944,15 +1992,33 @@ async function saveCurrentConversation() {
   await loadConversations()
 }
 
-async function renameConversation(item) {
-  const title = window.prompt('修改对话名称', item.title || '')
-  if (title === null || !title.trim()) return
+function startRenameConversation(item) {
+  conversations.renamingId = item.id
+  conversations.renameValue = item.title || ''
+  conversations.error = ''
+  nextTick(() => document.querySelector('.conversation-rename input')?.focus())
+}
+
+function cancelRenameConversation() {
+  if (conversations.renaming) return
+  conversations.renamingId = ''
+  conversations.renameValue = ''
+}
+
+async function saveRenameConversation(item) {
+  const title = conversations.renameValue.trim()
+  if (!title || conversations.renaming) return
+  conversations.renaming = true
   try {
-    await backend('assistant_conversation_rename', { id: item.id, title: title.trim() })
-    if (conversations.currentId === item.id) conversations.currentTitle = title.trim()
+    await backend('assistant_conversation_rename', { id: item.id, title })
+    if (conversations.currentId === item.id) conversations.currentTitle = title
+    conversations.renamingId = ''
+    conversations.renameValue = ''
     await loadConversations()
   } catch (e) {
     conversations.error = e.message
+  } finally {
+    conversations.renaming = false
   }
 }
 
@@ -1984,6 +2050,14 @@ function pushMsg(role, text, materials, extra = {}) {
     materials: (materials || []).map((m) => ({ ...m, picked: true })),
     gathered: '', gathering: false, exportError: '', organize: false, useWatermark: false, watermarkText: '',
     generatedDocument: null,
+    contractContext: null,
+    rateable: false,
+    rating: 0,
+    ratingFeedback: '',
+    ratedAt: '',
+    ratingSaving: false,
+    ratingSaved: false,
+    quickOptions: [],
     ...extra,
   })
   nextTick(() => { const el = document.querySelector('.chat-scroll'); if (el) el.scrollTop = el.scrollHeight })
@@ -2005,12 +2079,16 @@ async function sendChat() {
   } catch (e) {
     conversations.error = '聊天记录暂未保存：' + e.message
   }
-  const reply = pushMsg('ai', options.organize ? '正在核对并准备材料…' : '正在核对资料库…', [], options)
+  const reply = pushMsg('ai', options.organize ? '正在核对并准备材料…' : '正在核对资料库…', [], { ...options, rateable: false })
   try {
     const history = chat.messages
       .filter((m) => m !== reply)
       .slice(-12, -1)
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.text }))
+      .map((m) => ({
+        role: m.role === 'ai' ? 'assistant' : 'user',
+        content: m.text,
+        contract_context: m.contractContext || undefined,
+      }))
     const r = await backend('assistant_chat', {
       message: text,
       history,
@@ -2019,8 +2097,13 @@ async function sendChat() {
       watermark_text: options.watermarkText,
     })
     reply.text = r.reply || '我已经核对了当前库存。'
+    reply.quickOptions = Array.isArray(r.quick_options) ? r.quick_options.slice(0, 4) : []
+    reply.rateable = r.rateable !== false
     reply.materials = options.organize ? (r.materials || []).map((x) => ({ ...x, picked: true })) : []
     if (r.contract_job) {
+      reply.contractContext = r.contract_job
+      // 模板原件只负责提供条款，不作为本轮结果展示，避免误把旧合同当成新合同打开。
+      reply.materials = reply.materials.filter((item) => item.id !== Number(r.contract_job.source_document_id || 0))
       reply.text += '\n\n正在根据库存模板生成新合同文件…'
       try {
         const generated = await backend('generate_contract', { job: r.contract_job })
@@ -2056,6 +2139,8 @@ async function sendChat() {
     reply.trainingNotesUsed = r.training_notes_used || []
   } catch (e) {
     reply.text = '出错了：' + e.message
+    reply.quickOptions = []
+    reply.rateable = false
   } finally {
     chat.busy = false
     try {
@@ -2068,6 +2153,53 @@ async function sendChat() {
 }
 function onChatKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
+}
+function assistantOptionLabel(option) {
+  return typeof option === 'string' ? option : String(option?.label || option?.message || '')
+}
+async function chooseAssistantOption(option) {
+  if (chat.busy) return
+  const message = typeof option === 'string' ? option : String(option?.message || option?.label || '')
+  if (!message.trim()) return
+  chat.input = message.trim()
+  await sendChat()
+}
+const RATING_LABELS = ['', '需重做', '问题较多', '基本可用', '回答不错', '完全满意']
+function ratingLabel(score) {
+  return RATING_LABELS[Number(score) || 0] || ''
+}
+async function persistAnswerRating(msg) {
+  if (msg.ratingSaving) return
+  msg.ratingSaving = true
+  msg.ratingSaved = false
+  try {
+    await saveCurrentConversation()
+    msg.ratingSaved = true
+  } catch (e) {
+    conversations.error = '评分保存失败：' + e.message
+  } finally {
+    msg.ratingSaving = false
+  }
+}
+async function rateAnswer(msg, score) {
+  msg.rating = Number(score)
+  msg.ratedAt = new Date().toISOString()
+  await persistAnswerRating(msg)
+}
+async function saveAnswerFeedback(msg) {
+  if (!msg.rating) return
+  msg.ratedAt = new Date().toISOString()
+  await persistAnswerRating(msg)
+}
+async function exportTrainingDataset() {
+  try {
+    const result = await backend('assistant_training_export')
+    const opened = await api.openExternalPath(result.dir)
+    if (opened?.ok === false) throw new Error(opened.error || '无法打开导出文件夹')
+    window.alert(`已导出 ${result.count} 条已评分问答：\n${result.file_path}`)
+  } catch (e) {
+    window.alert('训练数据导出失败：' + e.message)
+  }
 }
 async function openGeneratedDocument(msg) {
   const path = msg.generatedDocument?.file_path
@@ -2121,7 +2253,10 @@ onMounted(async () => {
     await registerDevice()
     // 提前载入各类型版面字段，保证详情页任何时候都能按类型显示不同字段。
     try { await loadMeta() } catch {}
-    if (state.unlocked) await refreshSummary()
+    if (state.unlocked) {
+      await refreshSummary()
+      if (state.libraryDir) backend('start_knowledge_index').catch(() => {})
+    }
   } finally {
     booting.value = false
   }

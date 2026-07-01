@@ -286,6 +286,9 @@ def generate_contract_pdf(
     delivery_address: str = "",
     delivery_deadline: str = "",
     payment_terms: str = "",
+    payee_name: str = "",
+    bank_name: str = "",
+    bank_account: str = "",
 ) -> dict[str, Any]:
     """生成新合同并返回关键信息。只改用户明确指定的字段，其余模板条款保持原文。"""
     text = template_text.replace("\u2f8f", "行")
@@ -333,18 +336,35 @@ def generate_contract_pdf(
         if count != 1:
             raise RuntimeError("模板未找到可替换的付款时间条款，已停止生成。")
 
+    payee_name = str(payee_name or "").strip()[:200] or supplier_name
+    direct_bank_name = str(bank_name or "").strip()[:200]
+    direct_bank_account = re.sub(r"\s+", "", str(bank_account or "").strip())[:100]
+    if payee_name != supplier_name:
+        raise RuntimeError(
+            f"合同乙方“{supplier_name}”与收款单位“{payee_name}”不一致，已停止生成，请先确认合同主体。"
+        )
+
     support_joined = "\n".join(support_texts)
-    if support_joined and supplier_name not in support_joined:
+    if support_joined and supplier_name not in support_joined and not (direct_bank_name and direct_bank_account):
         raise RuntimeError("选择的供应商资料与新乙方名称不一致，请重新确认。")
-    bank_name = _support_value(support_texts, ["开户银行", "开户行"])
-    bank_account = _support_value(support_texts, ["银行账号", "银行账户", "账号"])
+    bank_name = direct_bank_name or _support_value(support_texts, ["开户银行", "开户行"])
+    bank_account = direct_bank_account or _support_value(support_texts, ["银行账号", "银行账户", "账号"])
+    bank_account = re.sub(r"\s+", "", bank_account)
     if supplier_name != old_supplier and (not bank_name or not bank_account):
         raise RuntimeError("未能从供应商开户/税务资料中读取开户银行和银行账号，已停止生成，避免写入错误财务信息。")
     if bank_name:
-        clauses = re.sub(r"开户银行\s*[:：]\s*[^\n\r]+", f"开户银行：{bank_name}", clauses)
+        clauses, count = re.subn(r"开户银行\s*[:：]\s*[^\n\r]+", f"开户银行：{bank_name}", clauses, count=1)
+        if count != 1:
+            raise RuntimeError("模板未找到可替换的开户银行字段，已停止生成。")
     if bank_account:
-        clauses = re.sub(r"银行账号\s*[:：]\s*[^\n\r]+", f"银行账号：{bank_account}", clauses)
-    clauses = re.sub(r"收款单位\s*[:：]\s*[^\n\r]+", f"收款单位：{supplier_name}", clauses)
+        clauses, count = re.subn(r"银行账号\s*[:：]\s*[^\n\r]+", f"银行账号：{bank_account}", clauses, count=1)
+        if count != 1:
+            raise RuntimeError("模板未找到可替换的银行账号字段，已停止生成。")
+    clauses, payee_count = re.subn(
+        r"收款单位\s*[:：]\s*[^\n\r]+", f"收款单位：{payee_name}", clauses, count=1
+    )
+    if supplier_name != old_supplier and payee_count != 1:
+        raise RuntimeError("模板未找到可替换的收款单位字段，已停止生成。")
     signature_index = clauses.find("甲方（盖章）")
     if signature_index >= 0:
         clauses = clauses[:signature_index].rstrip()
@@ -412,10 +432,16 @@ def generate_contract_pdf(
         verify_doc.close()
     compact_rendered = re.sub(r"\s+", "", rendered_text)
     expected_values = {
+        "乙方": supplier_name,
+        "收款单位": payee_name,
+        "开户银行": bank_name,
+        "银行账号": bank_account,
         "交付地点": delivery_address,
         "交货时间": delivery_deadline,
         "付款条件": payment_terms,
     }
+    for index, item in enumerate(normalized_items, start=1):
+        expected_values[f"商品{index}"] = str(item["name"])
     verified_fields: list[str] = []
     for label, expected in expected_values.items():
         if not expected:
@@ -424,9 +450,13 @@ def generate_contract_pdf(
             output_path.unlink(missing_ok=True)
             raise RuntimeError(f"合同生成后核对失败：{label}未正确写入，已停止交付文件。")
         verified_fields.append(label)
+    if supplier_name != old_supplier and re.sub(r"\s+", "", old_supplier) in compact_rendered:
+        output_path.unlink(missing_ok=True)
+        raise RuntimeError("合同生成后核对失败：旧乙方仍残留在新合同中，已停止交付文件。")
     return {
         "buyer": buyer,
         "supplier": supplier_name,
+        "payee_name": payee_name,
         "contract_no": contract_no,
         "total_amount": f"{total_amount:f}",
         "bank_name": bank_name,
